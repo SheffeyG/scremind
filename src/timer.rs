@@ -1,6 +1,6 @@
 use crate::config::{Config, ScheduledReminder};
 use crate::overlay::OverlayParams;
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct Timer {
     elapsed_secs: u64,
@@ -9,6 +9,9 @@ pub struct Timer {
     scheduled_reminders: Vec<ScheduledReminder>,
     fade_duration: f64,
     fps: u32,
+    font_size: i32,
+    font_name: String,
+    font_color: (u8, u8, u8, u8),
 }
 
 impl Timer {
@@ -20,6 +23,14 @@ impl Timer {
             scheduled_reminders: config.scheduled_reminders.clone(),
             fade_duration: config.overlay.fade_duration,
             fps: config.overlay.fps,
+            font_size: config.foreground.font_size,
+            font_name: config.foreground.font_name.clone(),
+            font_color: (
+                config.foreground.font_color.r,
+                config.foreground.font_color.g,
+                config.foreground.font_color.b,
+                config.foreground.font_color.a,
+            ),
         }
     }
 
@@ -28,10 +39,11 @@ impl Timer {
 
         let scheduled_triggered = self.check_scheduled_reminders();
 
-        // Scheduled reminder has priority over interval reminder
         if !scheduled_triggered && self.elapsed_secs >= self.interval {
             self.elapsed_secs = 0;
             println!("Triggering interval reminder...");
+            let now = get_current_time();
+            let time_str = format!("{:02}:{:02}", now.0, now.1);
             crate::overlay::show_overlay_with_params(OverlayParams {
                 alpha: config.interval_reminder.color.a,
                 fade_duration: self.fade_duration,
@@ -41,6 +53,10 @@ impl Timer {
                     config.interval_reminder.color.g,
                     config.interval_reminder.color.b,
                 ),
+                time_str,
+                font_size: self.font_size,
+                font_name: self.font_name.clone(),
+                font_color: self.font_color,
             });
         }
     }
@@ -63,6 +79,10 @@ impl Timer {
                     fade_duration: self.fade_duration,
                     fps: self.fps,
                     color: (reminder.color.r, reminder.color.g, reminder.color.b),
+                    time_str: current_time.clone(),
+                    font_size: self.font_size,
+                    font_name: self.font_name.clone(),
+                    font_color: self.font_color,
                 });
                 triggered = true;
             }
@@ -72,7 +92,6 @@ impl Timer {
 }
 
 fn get_current_time() -> (u32, u32) {
-    use std::time::UNIX_EPOCH;
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();

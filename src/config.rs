@@ -8,6 +8,9 @@ pub struct Config {
     pub overlay: OverlayConfig,
 
     #[serde(default)]
+    pub foreground: ForegroundConfig,
+
+    #[serde(default)]
     pub interval_reminder: IntervalReminder,
 
     #[serde(default)]
@@ -55,6 +58,33 @@ pub struct ColorConfig {
     pub a: u8,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ForegroundConfig {
+    #[serde(default = "default_font_size")]
+    pub font_size: i32,
+
+    #[serde(default = "default_font_name")]
+    pub font_name: String,
+
+    #[serde(default)]
+    pub font_color: FontColorConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FontColorConfig {
+    #[serde(default = "default_red")]
+    pub r: u8,
+
+    #[serde(default = "default_green")]
+    pub g: u8,
+
+    #[serde(default = "default_blue")]
+    pub b: u8,
+
+    #[serde(default = "default_alpha")]
+    pub a: u8,
+}
+
 fn default_fade_duration() -> f64 {
     1.0
 }
@@ -83,12 +113,21 @@ fn default_blue() -> u8 {
     255
 }
 
+fn default_font_size() -> i32 {
+    72
+}
+
+fn default_font_name() -> String {
+    "Arial".to_string()
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
             overlay: OverlayConfig::default(),
             interval_reminder: IntervalReminder::default(),
             scheduled_reminders: vec![],
+            foreground: ForegroundConfig::default(),
         }
     }
 }
@@ -114,6 +153,27 @@ impl Default for IntervalReminder {
 impl Default for ColorConfig {
     fn default() -> Self {
         ColorConfig {
+            r: default_red(),
+            g: default_green(),
+            b: default_blue(),
+            a: default_alpha(),
+        }
+    }
+}
+
+impl Default for ForegroundConfig {
+    fn default() -> Self {
+        ForegroundConfig {
+            font_size: default_font_size(),
+            font_name: default_font_name(),
+            font_color: FontColorConfig::default(),
+        }
+    }
+}
+
+impl Default for FontColorConfig {
+    fn default() -> Self {
+        FontColorConfig {
             r: default_red(),
             g: default_green(),
             b: default_blue(),
