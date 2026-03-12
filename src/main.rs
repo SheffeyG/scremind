@@ -17,10 +17,12 @@ use config::Config;
 static CONFIG: OnceLock<Config> = OnceLock::new();
 static RUNNING: AtomicBool = AtomicBool::new(true);
 static TIMER_STATE: OnceLock<Mutex<TimerState>> = OnceLock::new();
+static AUTOSTART_ENABLED: AtomicBool = AtomicBool::new(false);
 
 const WM_TRAYICON: u32 = WM_USER + 1;
 const ID_TRAY_EXIT: u32 = 1001;
 const ID_TRAY_RESET: u32 = 1002;
+const ID_TRAY_AUTOSTART: u32 = 1003;
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     unsafe {
@@ -28,6 +30,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         CONFIG.set(config.clone()).expect("Config already set");
 
         TIMER_STATE.get_or_init(|| Mutex::new(TimerState::new(&config)));
+
+        AUTOSTART_ENABLED.store(check_autostart_file(), Ordering::SeqCst);
 
         let h_instance = GetModuleHandleW(None)?;
 
@@ -106,6 +110,10 @@ unsafe extern "system" fn tray_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                     }
 
                     let _ = AppendMenuW(h_menu, MF_SEPARATOR, 0, w!(""));
+
+                    let autostart_checked = if AUTOSTART_ENABLED.load(Ordering::SeqCst) { MF_CHECKED } else { MENU_ITEM_FLAGS(0) };
+                    let _ = AppendMenuW(h_menu, MF_STRING | autostart_checked, ID_TRAY_AUTOSTART as usize, w!("Auto start"));
+
                     let _ = AppendMenuW(h_menu, MF_STRING, ID_TRAY_RESET as usize, w!("Reset"));
                     let _ = AppendMenuW(h_menu, MF_STRING, ID_TRAY_EXIT as usize, w!("Exit"));
 
@@ -127,6 +135,8 @@ unsafe extern "system" fn tray_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                         let _ = PostQuitMessage(0);
                     } else if cmd.0 == ID_TRAY_RESET as i32 {
                         trigger_interval_reminder();
+                    } else if cmd.0 == ID_TRAY_AUTOSTART as i32 {
+                        toggle_autostart();
                     }
                 }
             }
@@ -313,4 +323,80 @@ fn get_current_time() -> (u32, u32) {
     let hours = ((secs_in_day / 3600) + 8) % 24;
     let minutes = (secs_in_day % 3600) / 60;
     (hours as u32, minutes as u32)
+}
+
+fn check_autostart_file() -> bool {
+    let autostart_path = get_autostart_path();
+    if !autostart_path.exists() {
+        return false;
+    }
+
+    let exe_path = std::env::current_exe().unwrap_or_default();
+    let shortcut_target = get_shortcut_target(&autostart_path);
+    shortcut_target == exe_path.to_string_lossy().to_string()
+}
+
+fn toggle_autostart() {
+    let autostart_path = get_autostart_path();
+    let enabled = AUTOSTART_ENABLED.load(Ordering::SeqCst);
+
+    if enabled {
+        let _ = std::fs::remove_file(&autostart_path);
+        AUTOSTART_ENABLED.store(false, Ordering::SeqCst);
+    } else {
+        let exe_path = std::env::current_exe().unwrap_or_default();
+        create_shortcut(&autostart_path, &exe_path.to_string_lossy());
+        AUTOSTART_ENABLED.store(true, Ordering::SeqCst);
+    }
+}
+
+fn get_autostart_path() -> std::path::PathBuf {
+    let appdata = std::env::var("APPDATA").unwrap_or_default();
+    std::path::PathBuf::from(appdata)
+        .join("Microsoft")
+        .join("Windows")
+        .join("Start Menu")
+        .join("Programs")
+        .join("Startup")
+        .join("scremind.lnk")
+}
+
+fn create_shortcut(shortcut_path: &std::path::Path, target: &str) {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let ps_script = format!(
+        r#"$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('{}'); $s.TargetPath = '{}'; $s.Save()"#,
+        shortcut_path.to_string_lossy().replace('\'', "''"),
+        target.replace('\'', "''")
+    );
+
+    let _ = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+}
+
+fn get_shortcut_target(shortcut_path: &std::path::Path) -> String {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let ps_script = format!(
+        r#"$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('{}'); $s.TargetPath"#,
+        shortcut_path.to_string_lossy().replace('\'', "''")
+    );
+
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+
+    match output {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        Err(_) => String::new(),
+    }
 }
