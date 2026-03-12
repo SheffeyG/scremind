@@ -259,13 +259,15 @@ unsafe extern "system" fn overlay_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
                         if progress >= 1.0 {
                             state.current_alpha = target_alpha;
                             state.fade_state = FadeState::Hold;
+                            state.start_time = std::time::Instant::now();
                         } else {
                             state.current_alpha = (target_alpha as f64 * progress) as u8;
                         }
                     }
                     FadeState::Hold => {
                         state.current_alpha = target_alpha;
-                        if INPUT_RECEIVED.load(Ordering::SeqCst) {
+                        let hold_elapsed = state.start_time.elapsed().as_secs_f64();
+                        if hold_elapsed >= 0.5 && INPUT_RECEIVED.load(Ordering::SeqCst) {
                             state.fade_state = FadeState::FadeOut;
                             state.start_time = std::time::Instant::now();
                         }
