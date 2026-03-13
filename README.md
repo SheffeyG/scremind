@@ -13,6 +13,7 @@ The application reads configuration from `config.toml`. If the file doesn't exis
 ```toml
 [overlay]
 fade_duration = 2
+hold_duration = 1
 fps = 60
 
 [foreground]
@@ -32,7 +33,7 @@ interval = 1800
 r = 19
 g = 65
 b = 52
-a = 120
+a = 150
 
 [[scheduled_reminders]]
 time = "11:58"
@@ -41,7 +42,7 @@ time = "11:58"
 r = 255
 g = 95
 b = 95
-a = 120
+a = 180
 
 [[scheduled_reminders]]
 time = "18:25"
@@ -50,7 +51,7 @@ time = "18:25"
 r = 0
 g = 135
 b = 205
-a = 120
+a = 180
 ```
 
 </details>

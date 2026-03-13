@@ -22,6 +22,7 @@ struct WindowState {
     current_alpha: u8,
     target_alpha: u8,
     fade_duration: f64,
+    hold_duration: f64,
     fps: u32,
     color: (u8, u8, u8),
     time_str: String,
@@ -33,6 +34,7 @@ struct WindowState {
 pub struct OverlayParams {
     pub alpha: u8,
     pub fade_duration: f64,
+    pub hold_duration: f64,
     pub fps: u32,
     pub color: (u8, u8, u8),
     pub time_str: String,
@@ -96,6 +98,7 @@ unsafe fn run_overlay(params: &OverlayParams) -> std::result::Result<(), Box<dyn
         current_alpha: 0,
         target_alpha: params.alpha,
         fade_duration: params.fade_duration,
+        hold_duration: params.hold_duration,
         fps: params.fps,
         color: params.color,
         time_str: params.time_str.clone(),
@@ -267,7 +270,7 @@ unsafe extern "system" fn overlay_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
                     FadeState::Hold => {
                         state.current_alpha = target_alpha;
                         let hold_elapsed = state.start_time.elapsed().as_secs_f64();
-                        if hold_elapsed >= 0.5 && INPUT_RECEIVED.load(Ordering::SeqCst) {
+                        if hold_elapsed >= state.hold_duration && INPUT_RECEIVED.load(Ordering::SeqCst) {
                             state.fade_state = FadeState::FadeOut;
                             state.start_time = std::time::Instant::now();
                         }

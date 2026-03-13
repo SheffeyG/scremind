@@ -22,6 +22,9 @@ pub struct OverlayConfig {
     #[serde(default = "default_fade_duration")]
     pub fade_duration: f64,
 
+    #[serde(default = "default_hold_duration")]
+    pub hold_duration: f64,
+
     #[serde(default = "default_fps")]
     pub fps: u32,
 }
@@ -89,6 +92,10 @@ fn default_fade_duration() -> f64 {
     1.0
 }
 
+fn default_hold_duration() -> f64 {
+    0.5
+}
+
 fn default_fps() -> u32 {
     60
 }
@@ -136,6 +143,7 @@ impl Default for OverlayConfig {
     fn default() -> Self {
         OverlayConfig {
             fade_duration: default_fade_duration(),
+            hold_duration: default_hold_duration(),
             fps: default_fps(),
         }
     }

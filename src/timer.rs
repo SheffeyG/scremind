@@ -9,6 +9,7 @@ pub static TIMER_STATE: Mutex<TimerState> = Mutex::new(TimerState {
     interval: 0,
     scheduled_reminders: Vec::new(),
     fade_duration: 0.0,
+    hold_duration: 0.0,
     fps: 0,
     font_size: 0,
     font_name: String::new(),
@@ -21,6 +22,7 @@ pub struct TimerState {
     pub interval: u64,
     pub scheduled_reminders: Vec<crate::config::ScheduledReminder>,
     pub fade_duration: f64,
+    pub hold_duration: f64,
     pub fps: u32,
     pub font_size: i32,
     pub font_name: String,
@@ -35,6 +37,7 @@ impl TimerState {
             interval: config.interval_reminder.interval,
             scheduled_reminders: config.scheduled_reminders.clone(),
             fade_duration: config.overlay.fade_duration,
+            hold_duration: config.overlay.hold_duration,
             fps: config.overlay.fps,
             font_size: config.foreground.font_size,
             font_name: config.foreground.font_name.clone(),
@@ -77,6 +80,7 @@ pub fn tick(config: &Config) {
         crate::overlay::show_overlay_with_params(crate::overlay::OverlayParams {
             alpha: config.interval_reminder.color.a,
             fade_duration: state.fade_duration,
+            hold_duration: state.hold_duration,
             fps: state.fps,
             color: (
                 config.interval_reminder.color.r,
@@ -95,6 +99,7 @@ pub fn trigger_interval_reminder(config: &Config) {
     let mut state = TIMER_STATE.lock().unwrap();
     state.elapsed_secs = 0;
     let fade_duration = state.fade_duration;
+    let hold_duration = state.hold_duration;
     let fps = state.fps;
     let font_size = state.font_size;
     let font_name = state.font_name.clone();
@@ -106,6 +111,7 @@ pub fn trigger_interval_reminder(config: &Config) {
     crate::overlay::show_overlay_with_params(crate::overlay::OverlayParams {
         alpha: config.interval_reminder.color.a,
         fade_duration,
+        hold_duration,
         fps,
         color: (
             config.interval_reminder.color.r,
@@ -134,6 +140,7 @@ fn check_scheduled_reminders(state: &mut TimerState) -> bool {
             crate::overlay::show_overlay_with_params(crate::overlay::OverlayParams {
                 alpha: reminder.color.a,
                 fade_duration: state.fade_duration,
+                hold_duration: state.hold_duration,
                 fps: state.fps,
                 color: (reminder.color.r, reminder.color.g, reminder.color.b),
                 time_str: current_time.clone(),
