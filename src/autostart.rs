@@ -52,10 +52,16 @@ fn get_autostart_path() -> PathBuf {
 }
 
 fn create_shortcut(shortcut_path: &PathBuf, target: &str) {
+    let working_dir = std::path::Path::new(target)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
     let ps_script = format!(
-        r#"$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('{}'); $s.TargetPath = '{}'; $s.Save()"#,
+        r#"$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('{}'); $s.TargetPath = '{}'; $s.WorkingDirectory = '{}'; $s.Save()"#,
         shortcut_path.to_string_lossy().replace('\'', "''"),
-        target.replace('\'', "''")
+        target.replace('\'', "''"),
+        working_dir.replace('\'', "''")
     );
 
     let _ = Command::new("powershell")
