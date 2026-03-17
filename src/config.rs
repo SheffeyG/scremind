@@ -83,7 +83,7 @@ fn default_fg_color() -> [u8; 4] {
 }
 
 fn default_font_size() -> i32 {
-    72
+    120
 }
 
 fn default_font_name() -> String {

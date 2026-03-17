@@ -1,6 +1,6 @@
 # scremind
 
-A Windows screen overlay reminder application.
+A screen overlay reminder application for Windows.
 
 ### Configuration
 
@@ -37,7 +37,7 @@ bg_color = [0, 135, 205, 180]  # [r, g, b, a]
 | `overlay` | `fade_duration` | Fade animation duration in seconds | `1.0` |
 | `overlay` | `hold_duration` | Hold time range as `[min, max]` in seconds | `[1.0, 5.0]` |
 | `overlay` | `fps` | Animation frames per second | `60` |
-| `foreground` | `font_size` | Reminder text font size | `72` |
+| `foreground` | `font_size` | Reminder text font size | `120` |
 | `foreground` | `font_name` | Font family name | `"Arial"` |
 | `foreground` | `fg_color` | Text color as `[r, g, b, a]` array | `[255, 255, 255, 150]` |
 | `interval_reminder` | `interval` | Reminder interval in seconds | `1800` (30 min) |
