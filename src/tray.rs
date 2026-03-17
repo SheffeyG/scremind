@@ -81,7 +81,7 @@ unsafe fn show_menu(hwnd: HWND) {
             windows::core::PCWSTR(next_text_wide.as_ptr())
         );
 
-        let scheduled = timer::get_scheduled_reminders();
+        let scheduled = timer::get_schedule_reminders();
         if !scheduled.is_empty() {
             let _ = AppendMenuW(h_menu, MF_SEPARATOR, 0, w!(""));
             for reminder in &scheduled {

@@ -22,25 +22,25 @@ struct WindowState {
     current_alpha: u8,
     target_alpha: u8,
     fade_duration: f64,
-    hold_duration: f64,
+    hold_duration: [f64; 2],
     fps: u32,
     color: (u8, u8, u8),
     time_str: String,
     font_size: i32,
     font_name: String,
-    font_color: (u8, u8, u8, u8),
+    fg_color: (u8, u8, u8, u8),
 }
 
 pub struct OverlayParams {
     pub alpha: u8,
     pub fade_duration: f64,
-    pub hold_duration: f64,
+    pub hold_duration: [f64; 2],
     pub fps: u32,
     pub color: (u8, u8, u8),
     pub time_str: String,
     pub font_size: i32,
     pub font_name: String,
-    pub font_color: (u8, u8, u8, u8),
+    pub fg_color: (u8, u8, u8, u8),
 }
 
 pub fn show_overlay_with_params(params: OverlayParams) {
@@ -104,7 +104,7 @@ unsafe fn run_overlay(params: &OverlayParams) -> std::result::Result<(), Box<dyn
         time_str: params.time_str.clone(),
         font_size: params.font_size,
         font_name: params.font_name.clone(),
-        font_color: params.font_color,
+        fg_color: params.fg_color,
     });
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as _);
 
@@ -149,9 +149,9 @@ unsafe extern "system" fn overlay_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
             let height = rect.bottom - rect.top;
 
             let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
-            let (r, g, b, time_str, font_size, font_name, font_color) = if !state_ptr.is_null() {
+            let (r, g, b, time_str, font_size, font_name, fg_color) = if !state_ptr.is_null() {
                 let state = &*state_ptr;
-                (state.color.0, state.color.1, state.color.2, state.time_str.as_str(), state.font_size, state.font_name.as_str(), state.font_color)
+                (state.color.0, state.color.1, state.color.2, state.time_str.as_str(), state.font_size, state.font_name.as_str(), state.fg_color)
             } else {
                 (255, 255, 255, "", 72, "Arial", (255, 255, 255, 255))
             };
@@ -197,7 +197,7 @@ unsafe extern "system" fn overlay_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
             FillRect(text_dc, &mem_rect, black_brush);
             let _ = DeleteObject(black_brush);
 
-            let text_color = COLORREF((font_color.0 as u32) | ((font_color.1 as u32) << 8) | ((font_color.2 as u32) << 16));
+            let text_color = COLORREF((fg_color.0 as u32) | ((fg_color.1 as u32) << 8) | ((fg_color.2 as u32) << 16));
             SetTextColor(text_dc, text_color);
             SetBkMode(text_dc, TRANSPARENT);
 
@@ -209,7 +209,7 @@ unsafe extern "system" fn overlay_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE,
             );
 
-            let alpha = font_color.3;
+            let alpha = fg_color.3;
             let blend_fn = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
                 BlendFlags: 0,
@@ -270,7 +270,10 @@ unsafe extern "system" fn overlay_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
                     FadeState::Hold => {
                         state.current_alpha = target_alpha;
                         let hold_elapsed = state.start_time.elapsed().as_secs_f64();
-                        if hold_elapsed >= state.hold_duration && INPUT_RECEIVED.load(Ordering::SeqCst) {
+                        let min_hold = state.hold_duration[0];
+                        let max_hold = state.hold_duration[1];
+                        // Exit hold if min time passed and (input received or max time reached)
+                        if hold_elapsed >= min_hold && (hold_elapsed >= max_hold || INPUT_RECEIVED.load(Ordering::SeqCst)) {
                             state.fade_state = FadeState::FadeOut;
                             state.start_time = std::time::Instant::now();
                         }

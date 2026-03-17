@@ -14,7 +14,7 @@ pub struct Config {
     pub interval_reminder: IntervalReminder,
 
     #[serde(default)]
-    pub scheduled_reminders: Vec<ScheduledReminder>,
+    pub schedule_reminder: Vec<ScheduleReminder>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -23,7 +23,7 @@ pub struct OverlayConfig {
     pub fade_duration: f64,
 
     #[serde(default = "default_hold_duration")]
-    pub hold_duration: f64,
+    pub hold_duration: [f64; 2],
 
     #[serde(default = "default_fps")]
     pub fps: u32,
@@ -34,31 +34,16 @@ pub struct IntervalReminder {
     #[serde(default = "default_interval")]
     pub interval: u64,
 
-    #[serde(default)]
-    pub color: ColorConfig,
+    #[serde(default = "default_bg_color")]
+    pub bg_color: [u8; 4],
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ScheduledReminder {
+pub struct ScheduleReminder {
     pub time: String,
 
-    #[serde(default)]
-    pub color: ColorConfig,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ColorConfig {
-    #[serde(default = "default_red")]
-    pub r: u8,
-
-    #[serde(default = "default_green")]
-    pub g: u8,
-
-    #[serde(default = "default_blue")]
-    pub b: u8,
-
-    #[serde(default = "default_alpha")]
-    pub a: u8,
+    #[serde(default = "default_bg_color")]
+    pub bg_color: [u8; 4],
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -69,31 +54,16 @@ pub struct ForegroundConfig {
     #[serde(default = "default_font_name")]
     pub font_name: String,
 
-    #[serde(default)]
-    pub font_color: FontColorConfig,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct FontColorConfig {
-    #[serde(default = "default_red")]
-    pub r: u8,
-
-    #[serde(default = "default_green")]
-    pub g: u8,
-
-    #[serde(default = "default_blue")]
-    pub b: u8,
-
-    #[serde(default = "default_alpha")]
-    pub a: u8,
+    #[serde(default = "default_fg_color")]
+    pub fg_color: [u8; 4],
 }
 
 fn default_fade_duration() -> f64 {
     1.0
 }
 
-fn default_hold_duration() -> f64 {
-    0.5
+fn default_hold_duration() -> [f64; 2] {
+    [1.0, 5.0]
 }
 
 fn default_fps() -> u32 {
@@ -104,20 +74,12 @@ fn default_interval() -> u64 {
     30 * 60
 }
 
-fn default_alpha() -> u8 {
-    30
+fn default_bg_color() -> [u8; 4] {
+    [255, 255, 255, 30]
 }
 
-fn default_red() -> u8 {
-    255
-}
-
-fn default_green() -> u8 {
-    255
-}
-
-fn default_blue() -> u8 {
-    255
+fn default_fg_color() -> [u8; 4] {
+    [255, 255, 255, 150]
 }
 
 fn default_font_size() -> i32 {
@@ -133,7 +95,7 @@ impl Default for Config {
         Config {
             overlay: OverlayConfig::default(),
             interval_reminder: IntervalReminder::default(),
-            scheduled_reminders: vec![],
+            schedule_reminder: vec![],
             foreground: ForegroundConfig::default(),
         }
     }
@@ -153,18 +115,7 @@ impl Default for IntervalReminder {
     fn default() -> Self {
         IntervalReminder {
             interval: default_interval(),
-            color: ColorConfig::default(),
-        }
-    }
-}
-
-impl Default for ColorConfig {
-    fn default() -> Self {
-        ColorConfig {
-            r: default_red(),
-            g: default_green(),
-            b: default_blue(),
-            a: default_alpha(),
+            bg_color: default_bg_color(),
         }
     }
 }
@@ -174,18 +125,7 @@ impl Default for ForegroundConfig {
         ForegroundConfig {
             font_size: default_font_size(),
             font_name: default_font_name(),
-            font_color: FontColorConfig::default(),
-        }
-    }
-}
-
-impl Default for FontColorConfig {
-    fn default() -> Self {
-        FontColorConfig {
-            r: default_red(),
-            g: default_green(),
-            b: default_blue(),
-            a: default_alpha(),
+            fg_color: default_fg_color(),
         }
     }
 }
