@@ -137,13 +137,14 @@ impl Config {
         if !path.exists() {
             let default_config = Config::default();
             let toml_str = toml::to_string_pretty(&default_config)?;
-            fs::write(path, toml_str)?;
-            println!("Created default config file: {}", path.display());
+            fs::write(path, &toml_str)?;
+            log::info!("Created default config file: {}", path.display());
             return Ok(default_config);
         }
 
         let content = fs::read_to_string(path)?;
         let config: Config = toml::from_str(&content)?;
+        log::info!("Config loaded from: {}", path.display());
         Ok(config)
     }
 }

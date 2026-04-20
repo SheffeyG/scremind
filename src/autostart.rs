@@ -8,7 +8,9 @@ pub static AUTOSTART_ENABLED: AtomicBool = AtomicBool::new(false);
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub fn init() {
-    AUTOSTART_ENABLED.store(check_autostart_file(), Ordering::SeqCst);
+    let enabled = check_autostart_file();
+    AUTOSTART_ENABLED.store(enabled, Ordering::SeqCst);
+    log::info!("Autostart initialized: enabled={}", enabled);
 }
 
 pub fn is_enabled() -> bool {
@@ -22,10 +24,12 @@ pub fn toggle() {
     if enabled {
         let _ = std::fs::remove_file(&autostart_path);
         AUTOSTART_ENABLED.store(false, Ordering::SeqCst);
+        log::info!("Autostart disabled");
     } else {
         let exe_path = std::env::current_exe().unwrap_or_default();
         create_shortcut(&autostart_path, &exe_path.to_string_lossy());
         AUTOSTART_ENABLED.store(true, Ordering::SeqCst);
+        log::info!("Autostart enabled");
     }
 }
 

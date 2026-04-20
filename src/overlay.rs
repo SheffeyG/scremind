@@ -45,15 +45,20 @@ pub struct OverlayParams {
 
 pub fn show_overlay_with_params(params: OverlayParams) {
     if OVERLAY_ACTIVE.load(Ordering::SeqCst) {
+        log::warn!("Overlay already active, skipping");
         return;
     }
     OVERLAY_ACTIVE.store(true, Ordering::SeqCst);
     INPUT_RECEIVED.store(false, Ordering::SeqCst);
+    log::info!("Showing overlay: time_str={}", params.time_str);
 
     std::thread::spawn(move || {
         unsafe {
-            if let Err(_) = run_overlay(&params) {}
+            if let Err(e) = run_overlay(&params) {
+                log::error!("Overlay error: {}", e);
+            }
             OVERLAY_ACTIVE.store(false, Ordering::SeqCst);
+            log::info!("Overlay closed");
         }
     });
 }

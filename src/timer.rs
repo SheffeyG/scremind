@@ -57,6 +57,7 @@ impl TimerState {
 pub fn init(config: &Config) {
     let mut state = TIMER_STATE.lock().unwrap();
     *state = TimerState::new(config);
+    log::info!("Timer initialized: interval={}s", config.interval_reminder.interval);
 }
 
 pub fn get_remaining_time() -> u64 {
@@ -88,6 +89,7 @@ pub fn tick(config: &Config) {
         state.elapsed_secs = 0;
         let now = get_current_time();
         let time_str = format!("{:02}:{:02}", now.0, now.1);
+        log::info!("Interval reminder triggered at {}", time_str);
         crate::overlay::show_overlay_with_params(crate::overlay::OverlayParams {
             alpha: config.interval_reminder.bg_color[3],
             fade_duration: state.fade_duration,
@@ -119,6 +121,7 @@ pub fn trigger_interval_reminder(config: &Config) {
 
     let now = get_current_time();
     let time_str = format!("{:02}:{:02}", now.0, now.1);
+    log::info!("Manual interval reminder triggered at {}", time_str);
     crate::overlay::show_overlay_with_params(crate::overlay::OverlayParams {
         alpha: config.interval_reminder.bg_color[3],
         fade_duration,
@@ -148,6 +151,7 @@ fn check_schedule_reminders(state: &mut TimerState) -> bool {
     let mut triggered = false;
     for reminder in &state.schedule_reminder {
         if reminder.time == current_time {
+            log::info!("Schedule reminder triggered: {}", current_time);
             crate::overlay::show_overlay_with_params(crate::overlay::OverlayParams {
                 alpha: reminder.bg_color[3],
                 fade_duration: state.fade_duration,

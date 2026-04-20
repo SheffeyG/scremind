@@ -119,9 +119,11 @@ unsafe fn show_menu(hwnd: HWND) {
         if cmd.0 == ID_TRAY_EXIT as i32 {
             let _ = Shell_NotifyIconW(NIM_DELETE, &create_nid(hwnd));
             crate::RUNNING.store(false, Ordering::SeqCst);
+            log::info!("Exit selected from tray menu");
             let _ = PostQuitMessage(0);
         } else if cmd.0 == ID_TRAY_RESET as i32 {
             let cfg = crate::CONFIG.get().unwrap();
+            log::info!("Reset selected from tray menu");
             timer::trigger_interval_reminder(cfg);
         } else if cmd.0 == ID_TRAY_AUTOSTART as i32 {
             autostart::toggle();
