@@ -1,11 +1,12 @@
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 
 pub static TIMER_STATE: Mutex<TimerState> = Mutex::new(TimerState {
     elapsed_secs: 0,
     last_time: String::new(),
+    last_tick: None,
     interval: 0,
     schedule_reminder: Vec::new(),
     fade_duration: 0.0,
@@ -19,6 +20,7 @@ pub static TIMER_STATE: Mutex<TimerState> = Mutex::new(TimerState {
 pub struct TimerState {
     pub elapsed_secs: u64,
     pub last_time: String,
+    pub last_tick: Option<Instant>,
     pub interval: u64,
     pub schedule_reminder: Vec<crate::config::ScheduleReminder>,
     pub fade_duration: f64,
@@ -34,6 +36,7 @@ impl TimerState {
         TimerState {
             elapsed_secs: 0,
             last_time: String::new(),
+            last_tick: Some(Instant::now()),
             interval: config.interval_reminder.interval,
             schedule_reminder: config.schedule_reminder.clone(),
             fade_duration: config.overlay.fade_duration,
@@ -69,7 +72,15 @@ pub fn get_schedule_reminders() -> Vec<String> {
 
 pub fn tick(config: &Config) {
     let mut state = TIMER_STATE.lock().unwrap();
-    state.elapsed_secs += 1;
+    let now = Instant::now();
+
+    let elapsed = if let Some(last) = state.last_tick {
+        now.duration_since(last).as_secs()
+    } else {
+        1
+    };
+    state.elapsed_secs += elapsed;
+    state.last_tick = Some(now);
 
     let scheduled_triggered = check_schedule_reminders(&mut state);
 
