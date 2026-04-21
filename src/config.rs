@@ -2,10 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Default)]
 pub struct Rgba(pub u8, pub u8, pub u8, pub u8);
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub overlay: OverlayConfig,
@@ -20,7 +20,7 @@ pub struct Config {
     pub schedule_reminder: Vec<ScheduleReminder>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct OverlayConfig {
     #[serde(default = "default_fade_duration")]
     pub fade_duration: f64,
@@ -91,27 +91,6 @@ fn default_font_size() -> i32 {
 
 fn default_font_name() -> String {
     "Arial".to_string()
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            overlay: OverlayConfig::default(),
-            interval_reminder: IntervalReminder::default(),
-            schedule_reminder: vec![],
-            foreground: ForegroundConfig::default(),
-        }
-    }
-}
-
-impl Default for OverlayConfig {
-    fn default() -> Self {
-        OverlayConfig {
-            fade_duration: default_fade_duration(),
-            hold_duration: default_hold_duration(),
-            fps: default_fps(),
-        }
-    }
 }
 
 impl Default for IntervalReminder {
