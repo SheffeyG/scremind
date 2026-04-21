@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+pub struct Rgba(pub u8, pub u8, pub u8, pub u8);
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
@@ -35,7 +38,7 @@ pub struct IntervalReminder {
     pub interval: u64,
 
     #[serde(default = "default_bg_color")]
-    pub bg_color: [u8; 4],
+    pub bg_color: Rgba,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -43,7 +46,7 @@ pub struct ScheduleReminder {
     pub time: String,
 
     #[serde(default = "default_bg_color")]
-    pub bg_color: [u8; 4],
+    pub bg_color: Rgba,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -55,7 +58,7 @@ pub struct ForegroundConfig {
     pub font_name: String,
 
     #[serde(default = "default_fg_color")]
-    pub fg_color: [u8; 4],
+    pub fg_color: Rgba,
 }
 
 fn default_fade_duration() -> f64 {
@@ -74,12 +77,12 @@ fn default_interval() -> u64 {
     30 * 60
 }
 
-fn default_bg_color() -> [u8; 4] {
-    [255, 255, 255, 30]
+fn default_bg_color() -> Rgba {
+    Rgba(255, 255, 255, 30)
 }
 
-fn default_fg_color() -> [u8; 4] {
-    [255, 255, 255, 150]
+fn default_fg_color() -> Rgba {
+    Rgba(255, 255, 255, 150)
 }
 
 fn default_font_size() -> i32 {

@@ -6,6 +6,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::w;
 
+use crate::config::{Config, Rgba};
+
 static INPUT_RECEIVED: AtomicBool = AtomicBool::new(false);
 static OVERLAY_ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -24,23 +26,37 @@ struct WindowState {
     fade_duration: f64,
     hold_duration: [f64; 2],
     fps: u32,
-    color: (u8, u8, u8),
+    bg_color: Rgba,
     time_str: String,
     font_size: i32,
     font_name: String,
-    fg_color: (u8, u8, u8, u8),
+    fg_color: Rgba,
 }
 
 pub struct OverlayParams {
-    pub alpha: u8,
+    pub bg_color: Rgba,
     pub fade_duration: f64,
     pub hold_duration: [f64; 2],
     pub fps: u32,
-    pub color: (u8, u8, u8),
     pub time_str: String,
     pub font_size: i32,
     pub font_name: String,
-    pub fg_color: (u8, u8, u8, u8),
+    pub fg_color: Rgba,
+}
+
+impl OverlayParams {
+    pub fn from_config(config: &Config, bg_color: Rgba, time_str: String) -> Self {
+        OverlayParams {
+            bg_color,
+            fade_duration: config.overlay.fade_duration,
+            hold_duration: config.overlay.hold_duration,
+            fps: config.overlay.fps,
+            time_str,
+            font_size: config.foreground.font_size,
+            font_name: config.foreground.font_name.clone(),
+            fg_color: config.foreground.fg_color,
+        }
+    }
 }
 
 pub fn show_overlay_with_params(params: OverlayParams) {
@@ -101,11 +117,11 @@ unsafe fn run_overlay(params: &OverlayParams) -> std::result::Result<(), Box<dyn
         start_time: std::time::Instant::now(),
         fade_state: FadeState::FadeIn,
         current_alpha: 0,
-        target_alpha: params.alpha,
+        target_alpha: params.bg_color.3,
         fade_duration: params.fade_duration,
         hold_duration: params.hold_duration,
         fps: params.fps,
-        color: params.color,
+        bg_color: params.bg_color,
         time_str: params.time_str.clone(),
         font_size: params.font_size,
         font_name: params.font_name.clone(),
@@ -156,9 +172,9 @@ unsafe extern "system" fn overlay_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
             let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
             let (r, g, b, time_str, font_size, font_name, fg_color) = if !state_ptr.is_null() {
                 let state = &*state_ptr;
-                (state.color.0, state.color.1, state.color.2, state.time_str.as_str(), state.font_size, state.font_name.as_str(), state.fg_color)
+                (state.bg_color.0, state.bg_color.1, state.bg_color.2, state.time_str.as_str(), state.font_size, state.font_name.as_str(), state.fg_color)
             } else {
-                (255, 255, 255, "", 72, "Arial", (255, 255, 255, 255))
+                (255, 255, 255, "", 72, "Arial", Rgba(255, 255, 255, 255))
             };
 
             // Double buffering: draw to memory DC first, then BitBlt to screen to avoid flickering

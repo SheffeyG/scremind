@@ -1,34 +1,17 @@
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 
-pub static TIMER_STATE: Mutex<TimerState> = Mutex::new(TimerState {
-    elapsed_secs: 0,
-    last_time: String::new(),
-    last_tick: None,
-    interval: 0,
-    schedule_reminder: Vec::new(),
-    fade_duration: 0.0,
-    hold_duration: [0.0, 0.0],
-    fps: 0,
-    font_size: 0,
-    font_name: String::new(),
-    fg_color: (0, 0, 0, 0),
-});
+pub static TIMER_STATE: OnceLock<Mutex<TimerState>> = OnceLock::new();
 
+#[derive(Debug)]
 pub struct TimerState {
     pub elapsed_secs: u64,
     pub last_time: String,
     pub last_tick: Option<Instant>,
     pub interval: u64,
     pub schedule_reminder: Vec<crate::config::ScheduleReminder>,
-    pub fade_duration: f64,
-    pub hold_duration: [f64; 2],
-    pub fps: u32,
-    pub font_size: i32,
-    pub font_name: String,
-    pub fg_color: (u8, u8, u8, u8),
 }
 
 impl TimerState {
@@ -39,40 +22,29 @@ impl TimerState {
             last_tick: Some(Instant::now()),
             interval: config.interval_reminder.interval,
             schedule_reminder: config.schedule_reminder.clone(),
-            fade_duration: config.overlay.fade_duration,
-            hold_duration: config.overlay.hold_duration,
-            fps: config.overlay.fps,
-            font_size: config.foreground.font_size,
-            font_name: config.foreground.font_name.clone(),
-            fg_color: (
-                config.foreground.fg_color[0],
-                config.foreground.fg_color[1],
-                config.foreground.fg_color[2],
-                config.foreground.fg_color[3],
-            ),
         }
     }
 }
 
 pub fn init(config: &Config) {
-    let mut state = TIMER_STATE.lock().unwrap();
-    *state = TimerState::new(config);
+    let state = TimerState::new(config);
+    TIMER_STATE.set(Mutex::new(state)).expect("TimerState already initialized");
     log::info!("Timer initialized: interval={}s", config.interval_reminder.interval);
 }
 
 pub fn get_remaining_time() -> u64 {
-    let state = TIMER_STATE.lock().unwrap();
+    let state = TIMER_STATE.get().unwrap().lock().unwrap();
     let remaining_secs = state.interval.saturating_sub(state.elapsed_secs);
     (remaining_secs + 59) / 60
 }
 
 pub fn get_schedule_reminders() -> Vec<String> {
-    let state = TIMER_STATE.lock().unwrap();
+    let state = TIMER_STATE.get().unwrap().lock().unwrap();
     state.schedule_reminder.iter().map(|r| r.time.clone()).collect()
 }
 
 pub fn tick(config: &Config) {
-    let mut state = TIMER_STATE.lock().unwrap();
+    let mut state = TIMER_STATE.get().unwrap().lock().unwrap();
     let now = Instant::now();
 
     let elapsed = if let Some(last) = state.last_tick {
@@ -84,63 +56,33 @@ pub fn tick(config: &Config) {
     state.elapsed_secs += elapsed;
     state.last_tick = Some(now);
 
-    let scheduled_triggered = check_schedule_reminders(&mut state);
+    let scheduled_triggered = check_schedule_reminders(&mut state, config);
 
     if !scheduled_triggered && state.elapsed_secs >= state.interval {
         state.elapsed_secs = 0;
         let now = get_current_time();
         let time_str = format!("{:02}:{:02}", now.0, now.1);
         log::info!("Interval reminder triggered at {}", time_str);
-        crate::overlay::show_overlay_with_params(crate::overlay::OverlayParams {
-            alpha: config.interval_reminder.bg_color[3],
-            fade_duration: state.fade_duration,
-            hold_duration: state.hold_duration,
-            fps: state.fps,
-            color: (
-                config.interval_reminder.bg_color[0],
-                config.interval_reminder.bg_color[1],
-                config.interval_reminder.bg_color[2],
-            ),
-            time_str,
-            font_size: state.font_size,
-            font_name: state.font_name.clone(),
-            fg_color: state.fg_color,
-        });
+        crate::overlay::show_overlay_with_params(
+            crate::overlay::OverlayParams::from_config(config, config.interval_reminder.bg_color, time_str),
+        );
     }
 }
 
 pub fn trigger_interval_reminder(config: &Config) {
-    let mut state = TIMER_STATE.lock().unwrap();
+    let mut state = TIMER_STATE.get().unwrap().lock().unwrap();
     state.elapsed_secs = 0;
-    let fade_duration = state.fade_duration;
-    let hold_duration = state.hold_duration;
-    let fps = state.fps;
-    let font_size = state.font_size;
-    let font_name = state.font_name.clone();
-    let fg_color = state.fg_color;
     drop(state);
 
     let now = get_current_time();
     let time_str = format!("{:02}:{:02}", now.0, now.1);
     log::info!("Manual interval reminder triggered at {}", time_str);
-    crate::overlay::show_overlay_with_params(crate::overlay::OverlayParams {
-        alpha: config.interval_reminder.bg_color[3],
-        fade_duration,
-        hold_duration,
-        fps,
-        color: (
-            config.interval_reminder.bg_color[0],
-            config.interval_reminder.bg_color[1],
-            config.interval_reminder.bg_color[2],
-        ),
-        time_str,
-        font_size,
-        font_name,
-        fg_color,
-    });
+    crate::overlay::show_overlay_with_params(
+        crate::overlay::OverlayParams::from_config(config, config.interval_reminder.bg_color, time_str),
+    );
 }
 
-fn check_schedule_reminders(state: &mut TimerState) -> bool {
+fn check_schedule_reminders(state: &mut TimerState, config: &Config) -> bool {
     let now = get_current_time();
     let current_time = format!("{:02}:{:02}", now.0, now.1);
 
@@ -153,17 +95,9 @@ fn check_schedule_reminders(state: &mut TimerState) -> bool {
     for reminder in &state.schedule_reminder {
         if reminder.time == current_time {
             log::info!("Schedule reminder triggered: {}", current_time);
-            crate::overlay::show_overlay_with_params(crate::overlay::OverlayParams {
-                alpha: reminder.bg_color[3],
-                fade_duration: state.fade_duration,
-                hold_duration: state.hold_duration,
-                fps: state.fps,
-                color: (reminder.bg_color[0], reminder.bg_color[1], reminder.bg_color[2]),
-                time_str: current_time.clone(),
-                font_size: state.font_size,
-                font_name: state.font_name.clone(),
-                fg_color: state.fg_color,
-            });
+            crate::overlay::show_overlay_with_params(
+                crate::overlay::OverlayParams::from_config(config, reminder.bg_color, current_time.clone()),
+            );
             triggered = true;
         }
     }
