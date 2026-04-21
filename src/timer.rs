@@ -76,7 +76,8 @@ pub fn tick(config: &Config) {
     let now = Instant::now();
 
     let elapsed = if let Some(last) = state.last_tick {
-        now.duration_since(last).as_secs()
+        let millis = now.duration_since(last).as_millis() as u64;
+        (millis + 500) / 1000
     } else {
         1
     };
