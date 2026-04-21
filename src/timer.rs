@@ -1,7 +1,7 @@
 use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use crate::config::Config;
+use crate::config::{Config, Rgba};
 
 pub static TIMER_STATE: OnceLock<Mutex<TimerState>> = OnceLock::new();
 
@@ -56,52 +56,51 @@ pub fn tick(config: &Config) {
     state.elapsed_secs += elapsed;
     state.last_tick = Some(now);
 
-    let scheduled_triggered = check_schedule_reminders(&mut state, config);
+    let current_time = {
+        let t = get_current_time();
+        format!("{:02}:{:02}", t.0, t.1)
+    };
 
-    if !scheduled_triggered && state.elapsed_secs >= state.interval {
-        state.elapsed_secs = 0;
-        let now = get_current_time();
-        let time_str = format!("{:02}:{:02}", now.0, now.1);
-        log::info!("Interval reminder triggered at {}", time_str);
-        crate::overlay::show_overlay_with_params(
-            crate::overlay::OverlayParams::from_config(config, config.interval_reminder.bg_color, time_str),
-        );
-    }
-}
-
-pub fn trigger_interval_reminder(config: &Config) {
-    let mut state = TIMER_STATE.get().unwrap().lock().unwrap();
-    state.elapsed_secs = 0;
-    drop(state);
-
-    let now = get_current_time();
-    let time_str = format!("{:02}:{:02}", now.0, now.1);
-    log::info!("Manual interval reminder triggered at {}", time_str);
-    crate::overlay::show_overlay_with_params(
-        crate::overlay::OverlayParams::from_config(config, config.interval_reminder.bg_color, time_str),
-    );
-}
-
-fn check_schedule_reminders(state: &mut TimerState, config: &Config) -> bool {
-    let now = get_current_time();
-    let current_time = format!("{:02}:{:02}", now.0, now.1);
-
-    if current_time == state.last_time {
-        return false;
-    }
-    state.last_time = current_time.clone();
-
-    let mut triggered = false;
-    for reminder in &state.schedule_reminder {
-        if reminder.time == current_time {
-            log::info!("Schedule reminder triggered: {}", current_time);
-            crate::overlay::show_overlay_with_params(
-                crate::overlay::OverlayParams::from_config(config, reminder.bg_color, current_time.clone()),
-            );
-            triggered = true;
+    let mut scheduled_bg_colors: Vec<Rgba> = Vec::new();
+    if current_time != state.last_time {
+        state.last_time = current_time.clone();
+        for reminder in &state.schedule_reminder {
+            if reminder.time == current_time {
+                scheduled_bg_colors.push(reminder.bg_color);
+            }
         }
     }
-    triggered
+
+    let should_trigger_interval = scheduled_bg_colors.is_empty() && state.elapsed_secs >= state.interval;
+    if should_trigger_interval {
+        state.elapsed_secs = 0;
+    }
+    drop(state);
+
+    for bg_color in &scheduled_bg_colors {
+        trigger_reminder(config, *bg_color, "Schedule reminder");
+    }
+
+    if should_trigger_interval {
+        trigger_reminder(config, config.interval_reminder.bg_color, "Interval reminder");
+    }
+}
+
+pub fn reset_timer(config: &Config) {
+    {
+        let mut state = TIMER_STATE.get().unwrap().lock().unwrap();
+        state.elapsed_secs = 0;
+    }
+    trigger_reminder(config, config.interval_reminder.bg_color, "Interval reminder");
+}
+
+pub fn trigger_reminder(config: &Config, bg_color: Rgba, label: &str) {
+    let now = get_current_time();
+    let time_str = format!("{:02}:{:02}", now.0, now.1);
+    log::info!("{} triggered at {}", label, time_str);
+    crate::overlay::show_overlay_with_params(
+        crate::overlay::OverlayParams::from_config(config, bg_color, time_str),
+    );
 }
 
 fn get_current_time() -> (u32, u32) {

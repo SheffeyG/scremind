@@ -124,7 +124,7 @@ unsafe fn show_menu(hwnd: HWND) {
         } else if cmd.0 == ID_TRAY_RESET as i32 {
             let cfg = crate::CONFIG.get().unwrap();
             log::info!("Reset selected from tray menu");
-            timer::trigger_interval_reminder(cfg);
+            timer::reset_timer(cfg);
         } else if cmd.0 == ID_TRAY_AUTOSTART as i32 {
             autostart::toggle();
         }
