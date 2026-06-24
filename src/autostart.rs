@@ -1,5 +1,6 @@
+use std::io;
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -17,19 +18,50 @@ pub fn is_enabled() -> bool {
     AUTOSTART_ENABLED.load(Ordering::SeqCst)
 }
 
-pub fn toggle() {
-    let autostart_path = get_autostart_path();
-    let enabled = AUTOSTART_ENABLED.load(Ordering::SeqCst);
-
-    if enabled {
-        let _ = std::fs::remove_file(&autostart_path);
-        AUTOSTART_ENABLED.store(false, Ordering::SeqCst);
-        log::info!("Autostart disabled");
+pub fn toggle() -> io::Result<bool> {
+    let enabled = is_enabled();
+    let new_enabled = if enabled {
+        disable_autostart()?
     } else {
-        let exe_path = std::env::current_exe().unwrap_or_default();
-        create_shortcut(&autostart_path, &exe_path.to_string_lossy());
-        AUTOSTART_ENABLED.store(true, Ordering::SeqCst);
+        enable_autostart()?
+    };
+
+    AUTOSTART_ENABLED.store(new_enabled, Ordering::SeqCst);
+    Ok(new_enabled)
+}
+
+fn enable_autostart() -> io::Result<bool> {
+    let autostart_path = get_autostart_path();
+    let exe_path = std::env::current_exe()?;
+    create_shortcut(&autostart_path, &exe_path)?;
+
+    let enabled = check_autostart_file();
+    if enabled {
         log::info!("Autostart enabled");
+        Ok(true)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            "startup shortcut was created but verification failed",
+        ))
+    }
+}
+
+fn disable_autostart() -> io::Result<bool> {
+    let autostart_path = get_autostart_path();
+    if autostart_path.exists() {
+        std::fs::remove_file(&autostart_path)?;
+    }
+
+    let enabled = check_autostart_file();
+    if !enabled {
+        log::info!("Autostart disabled");
+        Ok(false)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            "startup shortcut still points to the current executable",
+        ))
     }
 }
 
@@ -40,8 +72,17 @@ fn check_autostart_file() -> bool {
     }
 
     let exe_path = std::env::current_exe().unwrap_or_default();
-    let shortcut_target = get_shortcut_target(&autostart_path);
-    shortcut_target == exe_path.to_string_lossy().to_string()
+    match get_shortcut_target(&autostart_path) {
+        Ok(shortcut_target) => shortcut_target == exe_path,
+        Err(e) => {
+            log::warn!(
+                "Failed to inspect autostart shortcut {}: {}",
+                autostart_path.display(),
+                e
+            );
+            false
+        }
+    }
 }
 
 fn get_autostart_path() -> PathBuf {
@@ -55,38 +96,54 @@ fn get_autostart_path() -> PathBuf {
         .join("scremind.lnk")
 }
 
-fn create_shortcut(shortcut_path: &PathBuf, target: &str) {
-    let working_dir = std::path::Path::new(target)
-        .parent()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
+fn create_shortcut(shortcut_path: &Path, target: &Path) -> io::Result<()> {
+    let working_dir = target.parent().unwrap_or_else(|| Path::new(""));
 
     let ps_script = format!(
         r#"$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('{}'); $s.TargetPath = '{}'; $s.WorkingDirectory = '{}'; $s.Save()"#,
-        shortcut_path.to_string_lossy().replace('\'', "''"),
-        target.replace('\'', "''"),
-        working_dir.replace('\'', "''")
+        escape_ps_single_quoted(shortcut_path),
+        escape_ps_single_quoted(target),
+        escape_ps_single_quoted(working_dir)
     );
 
-    let _ = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output();
+    run_powershell(&ps_script).map(|_| ())
 }
 
-fn get_shortcut_target(shortcut_path: &PathBuf) -> String {
+fn get_shortcut_target(shortcut_path: &Path) -> io::Result<PathBuf> {
     let ps_script = format!(
         r#"$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('{}'); $s.TargetPath"#,
-        shortcut_path.to_string_lossy().replace('\'', "''")
+        escape_ps_single_quoted(shortcut_path)
     );
 
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output();
-
-    match output {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        Err(_) => String::new(),
+    let output = run_powershell(&ps_script)?;
+    let target = output.trim();
+    if target.is_empty() {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            "shortcut target is empty",
+        ))
+    } else {
+        Ok(PathBuf::from(target))
     }
+}
+
+fn run_powershell(script: &str) -> io::Result<String> {
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("powershell command failed: {}", stderr),
+        ))
+    }
+}
+
+fn escape_ps_single_quoted(path: &Path) -> String {
+    path.to_string_lossy().replace('\'', "''")
 }

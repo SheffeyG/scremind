@@ -1,5 +1,4 @@
 use std::mem;
-use std::sync::atomic::Ordering;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::*;
@@ -52,12 +51,10 @@ pub unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
             LRESULT(0)
         }
         WM_TIMER => {
-            let cfg = crate::CONFIG.get().unwrap();
-            timer::tick(cfg);
+            timer::tick(crate::config());
             LRESULT(0)
         }
         WM_DESTROY => {
-            crate::RUNNING.store(false, Ordering::SeqCst);
             let _ = PostQuitMessage(0);
             LRESULT(0)
         }
@@ -117,16 +114,20 @@ unsafe fn show_menu(hwnd: HWND) {
         let _ = DestroyMenu(h_menu);
 
         if cmd.0 == ID_TRAY_EXIT as i32 {
-            let _ = Shell_NotifyIconW(NIM_DELETE, &create_nid(hwnd));
-            crate::RUNNING.store(false, Ordering::SeqCst);
             log::info!("Exit selected from tray menu");
-            let _ = PostQuitMessage(0);
+            crate::shutdown(hwnd);
         } else if cmd.0 == ID_TRAY_RESET as i32 {
-            let cfg = crate::CONFIG.get().unwrap();
             log::info!("Reset selected from tray menu");
-            timer::reset_timer(cfg);
+            timer::reset_timer(crate::config());
         } else if cmd.0 == ID_TRAY_AUTOSTART as i32 {
-            autostart::toggle();
+            match autostart::toggle() {
+                Ok(enabled) => {
+                    log::info!("Autostart toggled from tray menu: enabled={}", enabled);
+                }
+                Err(e) => {
+                    log::error!("Failed to toggle autostart from tray menu: {}", e);
+                }
+            }
         }
     }
 }

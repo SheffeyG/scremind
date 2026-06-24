@@ -1,5 +1,6 @@
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Once;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -10,6 +11,7 @@ use crate::config::{Config, Rgba};
 
 static INPUT_RECEIVED: AtomicBool = AtomicBool::new(false);
 static OVERLAY_ACTIVE: AtomicBool = AtomicBool::new(false);
+static REGISTER_OVERLAY_CLASS: Once = Once::new();
 
 #[derive(Clone, Copy, PartialEq)]
 enum FadeState {
@@ -31,6 +33,37 @@ struct WindowState {
     font_size: i32,
     font_name: String,
     fg_color: Rgba,
+}
+
+struct OverlayActivationGuard;
+
+impl OverlayActivationGuard {
+    fn try_acquire() -> Option<Self> {
+        OVERLAY_ACTIVE
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| Self)
+    }
+}
+
+impl Drop for OverlayActivationGuard {
+    fn drop(&mut self) {
+        OVERLAY_ACTIVE.store(false, Ordering::SeqCst);
+    }
+}
+
+struct HookGuard(HHOOK);
+
+impl HookGuard {
+    fn install(id: WINDOWS_HOOK_ID, proc: HOOKPROC, h_instance: HINSTANCE) -> windows::core::Result<Self> {
+        Ok(Self(unsafe { SetWindowsHookExW(id, proc, h_instance, 0)? }))
+    }
+}
+
+impl Drop for HookGuard {
+    fn drop(&mut self) {
+        let _ = unsafe { UnhookWindowsHookEx(self.0) };
+    }
 }
 
 pub struct OverlayParams {
@@ -60,38 +93,43 @@ impl OverlayParams {
 }
 
 pub fn show_overlay_with_params(params: OverlayParams) {
-    if OVERLAY_ACTIVE.load(Ordering::SeqCst) {
+    let Some(activation_guard) = OverlayActivationGuard::try_acquire() else {
         log::warn!("Overlay already active, skipping");
         return;
-    }
-    OVERLAY_ACTIVE.store(true, Ordering::SeqCst);
+    };
     INPUT_RECEIVED.store(false, Ordering::SeqCst);
     log::info!("Showing overlay: time_str={}", params.time_str);
 
     std::thread::spawn(move || {
+        let _activation_guard = activation_guard;
         unsafe {
             if let Err(e) = run_overlay(&params) {
                 log::error!("Overlay error: {}", e);
             }
-            OVERLAY_ACTIVE.store(false, Ordering::SeqCst);
             log::info!("Overlay closed");
         }
     });
 }
 
 unsafe fn register_overlay_class(h_instance: HINSTANCE) {
-    let window_class = WNDCLASSW {
-        style: CS_HREDRAW | CS_VREDRAW,
-        lpfnWndProc: Some(overlay_wnd_proc),
-        hInstance: h_instance,
-        lpszClassName: w!("OverlayWindowClass"),
-        hbrBackground: CreateSolidBrush(COLORREF(0)),
-        ..mem::zeroed()
-    };
-    RegisterClassW(&window_class);
+    REGISTER_OVERLAY_CLASS.call_once(|| {
+        let window_class = WNDCLASSW {
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(overlay_wnd_proc),
+            hInstance: h_instance,
+            lpszClassName: w!("OverlayWindowClass"),
+            hbrBackground: CreateSolidBrush(COLORREF(0)),
+            ..mem::zeroed()
+        };
+        RegisterClassW(&window_class);
+    });
 }
 
-unsafe fn create_overlay_window(h_instance: HINSTANCE) -> std::result::Result<HWND, Box<dyn std::error::Error>> {
+unsafe fn create_overlay_window(
+    h_instance: HINSTANCE,
+    state: Box<WindowState>,
+) -> std::result::Result<HWND, Box<dyn std::error::Error>> {
+    let state_ptr = Box::into_raw(state);
     let hwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
         w!("OverlayWindowClass"),
@@ -104,21 +142,24 @@ unsafe fn create_overlay_window(h_instance: HINSTANCE) -> std::result::Result<HW
         None,
         None,
         h_instance,
-        None,
-    )?;
+        Some(state_ptr as _),
+    );
+    let hwnd = match hwnd {
+        Ok(hwnd) => hwnd,
+        Err(e) => {
+            drop(Box::from_raw(state_ptr));
+            return Err(Box::new(e));
+        }
+    };
     let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_ALPHA);
     Ok(hwnd)
 }
 
 unsafe fn run_overlay(params: &OverlayParams) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let h_instance = GetModuleHandleW(None)?;
+    let h_instance = HINSTANCE(h_instance.0);
 
-    register_overlay_class(h_instance.into());
-    let hwnd = create_overlay_window(h_instance.into())?;
-
-    let keyboard_hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), h_instance, 0)?;
-    let mouse_hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook_proc), h_instance, 0)?;
-
+    register_overlay_class(h_instance);
     let state = Box::new(WindowState {
         start_time: std::time::Instant::now(),
         fade_state: FadeState::FadeIn,
@@ -133,7 +174,10 @@ unsafe fn run_overlay(params: &OverlayParams) -> std::result::Result<(), Box<dyn
         font_name: params.font_name.clone(),
         fg_color: params.fg_color,
     });
-    SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as _);
+    let hwnd = create_overlay_window(h_instance, state)?;
+
+    let _keyboard_hook = HookGuard::install(WH_KEYBOARD_LL, Some(keyboard_hook_proc), h_instance)?;
+    let _mouse_hook = HookGuard::install(WH_MOUSE_LL, Some(mouse_hook_proc), h_instance)?;
 
     let _ = ShowWindow(hwnd, SW_SHOW);
     let _ = UpdateWindow(hwnd);
@@ -143,9 +187,6 @@ unsafe fn run_overlay(params: &OverlayParams) -> std::result::Result<(), Box<dyn
         let _ = TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
-
-    let _ = UnhookWindowsHookEx(keyboard_hook);
-    let _ = UnhookWindowsHookEx(mouse_hook);
 
     Ok(())
 }
@@ -308,6 +349,14 @@ unsafe fn update_fade_state(hwnd: HWND) -> LRESULT {
 
 unsafe extern "system" fn overlay_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
+        WM_NCCREATE => {
+            let create_struct = lparam.0 as *const CREATESTRUCTW;
+            if !create_struct.is_null() {
+                let state_ptr = (*create_struct).lpCreateParams as *mut WindowState;
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr as _);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_PAINT => {
             paint_overlay(hwnd);
             LRESULT(0)
@@ -333,6 +382,7 @@ unsafe extern "system" fn overlay_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
             let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
             if !state_ptr.is_null() {
                 drop(Box::from_raw(state_ptr));
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             }
             PostQuitMessage(0);
             LRESULT(0)

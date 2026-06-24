@@ -9,6 +9,7 @@ mod tray;
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+use windows::Win32::Foundation::HWND;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -17,8 +18,51 @@ use windows::core::w;
 use config::Config;
 use simplelog::*;
 
-static CONFIG: OnceLock<Config> = OnceLock::new();
-static RUNNING: AtomicBool = AtomicBool::new(true);
+static APP_STATE: OnceLock<AppState> = OnceLock::new();
+
+#[derive(Debug)]
+struct AppState {
+    config: Config,
+    running: AtomicBool,
+}
+
+impl AppState {
+    fn new(config: Config) -> Self {
+        Self {
+            config,
+            running: AtomicBool::new(true),
+        }
+    }
+
+    fn config(&self) -> &Config {
+        &self.config
+    }
+
+    fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
+    fn stop(&self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
+}
+
+fn app_state() -> &'static AppState {
+    APP_STATE.get().expect("AppState not initialized")
+}
+
+pub fn config() -> &'static Config {
+    app_state().config()
+}
+
+pub fn shutdown(hwnd: HWND) {
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_DELETE, &tray::create_nid(hwnd));
+        let _ = KillTimer(hwnd, 1);
+        app_state().stop();
+        let _ = DestroyWindow(hwnd);
+    }
+}
 
 fn init_logger() {
     let exe_path = std::env::current_exe().unwrap_or_default();
@@ -45,8 +89,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     unsafe {
         let config = Config::load("config.toml")?;
-        CONFIG.set(config.clone()).expect("Config already set");
-        log::info!("Config loaded: interval={}s, schedule_count={}", config.interval_reminder.interval, config.schedule_reminder.len());
+        APP_STATE
+            .set(AppState::new(config.clone()))
+            .expect("AppState already set");
+        log::info!(
+            "Config loaded: interval={}s, schedule_count={}",
+            config.interval_reminder.interval,
+            config.schedule_reminder.len()
+        );
 
         timer::init(&config);
         autostart::init();
@@ -68,8 +118,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             w!("TrayWindowClass"),
             w!("Screen Reminder"),
             WS_OVERLAPPED,
-            0, 0, 0, 0,
-            None, None, h_instance, None,
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            h_instance,
+            None,
         )?;
 
         let nid = tray::create_nid(hwnd);
@@ -84,7 +140,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
 
-            if !RUNNING.load(Ordering::SeqCst) {
+            if !app_state().is_running() {
                 break;
             }
         }

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
 pub struct Rgba(pub u8, pub u8, pub u8, pub u8);
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
