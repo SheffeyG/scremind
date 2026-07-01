@@ -1,21 +1,24 @@
 #![windows_subsystem = "windows"]
 
+mod animation;
 mod autostart;
 mod config;
 mod overlay;
+mod reminder;
 mod timer;
 mod tray;
 
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+use windows::core::w;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::w;
 
 use config::Config;
+use reminder::ReminderEvent;
 use simplelog::*;
 
 static APP_STATE: OnceLock<AppState> = OnceLock::new();
@@ -64,6 +67,17 @@ pub fn shutdown(hwnd: HWND) {
     }
 }
 
+pub fn dispatch_reminders(events: Vec<ReminderEvent>) {
+    for event in events {
+        log::info!("{} triggered at {}", event.label(), event.time);
+        overlay::show_overlay_with_params(overlay::OverlayParams::from_config(
+            config(),
+            event.bg_color,
+            event.time,
+        ));
+    }
+}
+
 fn init_logger() {
     let exe_path = std::env::current_exe().unwrap_or_default();
     let log_path = exe_path.with_extension("log");
@@ -84,10 +98,13 @@ fn init_logger() {
     log::info!("Logger initialized, log file: {}", log_path.display());
 }
 
-fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    init_logger();
+struct App {
+    hwnd: HWND,
+    nid: NOTIFYICONDATAW,
+}
 
-    unsafe {
+impl App {
+    unsafe fn init() -> std::result::Result<Self, Box<dyn std::error::Error>> {
         let config = Config::load("config.toml")?;
         APP_STATE
             .set(AppState::new(config.clone()))
@@ -102,39 +119,16 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         autostart::init();
         log::info!("Timer and autostart initialized");
 
-        let h_instance = GetModuleHandleW(None)?;
-
-        let wnd_class = WNDCLASSW {
-            lpfnWndProc: Some(tray::wnd_proc),
-            hInstance: h_instance.into(),
-            lpszClassName: w!("TrayWindowClass"),
-            ..mem::zeroed()
-        };
-
-        RegisterClassW(&wnd_class);
-
-        let hwnd = CreateWindowExW(
-            WS_EX_NOACTIVATE,
-            w!("TrayWindowClass"),
-            w!("Screen Reminder"),
-            WS_OVERLAPPED,
-            0,
-            0,
-            0,
-            0,
-            None,
-            None,
-            h_instance,
-            None,
-        )?;
-
+        let hwnd = create_tray_window()?;
         let nid = tray::create_nid(hwnd);
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
-
-        let timer_id: usize = 1;
-        SetTimer(hwnd, timer_id, 1000, None);
+        SetTimer(hwnd, 1, 1000, None);
         log::info!("Tray icon created, timer started");
 
+        Ok(Self { hwnd, nid })
+    }
+
+    unsafe fn run(&self) {
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
@@ -144,10 +138,51 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 break;
             }
         }
-
-        let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
-        log::info!("Application exiting");
-
-        Ok(())
     }
+
+    unsafe fn cleanup(&self) {
+        let _ = Shell_NotifyIconW(NIM_DELETE, &self.nid);
+        let _ = KillTimer(self.hwnd, 1);
+        log::info!("Application exiting");
+    }
+}
+
+unsafe fn create_tray_window() -> std::result::Result<HWND, Box<dyn std::error::Error>> {
+    let h_instance = GetModuleHandleW(None)?;
+
+    let wnd_class = WNDCLASSW {
+        lpfnWndProc: Some(tray::wnd_proc),
+        hInstance: h_instance.into(),
+        lpszClassName: w!("TrayWindowClass"),
+        ..mem::zeroed()
+    };
+
+    RegisterClassW(&wnd_class);
+
+    Ok(CreateWindowExW(
+        WS_EX_NOACTIVATE,
+        w!("TrayWindowClass"),
+        w!("Screen Reminder"),
+        WS_OVERLAPPED,
+        0,
+        0,
+        0,
+        0,
+        None,
+        None,
+        h_instance,
+        None,
+    )?)
+}
+
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    init_logger();
+
+    unsafe {
+        let app = App::init()?;
+        app.run();
+        app.cleanup();
+    }
+
+    Ok(())
 }

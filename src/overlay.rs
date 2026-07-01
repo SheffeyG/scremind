@@ -1,32 +1,22 @@
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
+use windows::core::w;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::w;
 
+use crate::animation::{AnimationUpdate, FadeAnimation};
 use crate::config::{Config, Rgba};
 
 static INPUT_RECEIVED: AtomicBool = AtomicBool::new(false);
 static OVERLAY_ACTIVE: AtomicBool = AtomicBool::new(false);
 static REGISTER_OVERLAY_CLASS: Once = Once::new();
 
-#[derive(Clone, Copy, PartialEq)]
-enum FadeState {
-    FadeIn,
-    Hold,
-    FadeOut,
-}
-
 struct WindowState {
-    start_time: std::time::Instant,
-    fade_state: FadeState,
+    animation: FadeAnimation,
     current_alpha: u8,
-    target_alpha: u8,
-    fade_duration: f64,
-    hold_duration: [f64; 2],
     fps: u32,
     bg_color: Rgba,
     time_str: String,
@@ -55,7 +45,11 @@ impl Drop for OverlayActivationGuard {
 struct HookGuard(HHOOK);
 
 impl HookGuard {
-    fn install(id: WINDOWS_HOOK_ID, proc: HOOKPROC, h_instance: HINSTANCE) -> windows::core::Result<Self> {
+    fn install(
+        id: WINDOWS_HOOK_ID,
+        proc: HOOKPROC,
+        h_instance: HINSTANCE,
+    ) -> windows::core::Result<Self> {
         Ok(Self(unsafe { SetWindowsHookExW(id, proc, h_instance, 0)? }))
     }
 }
@@ -155,18 +149,20 @@ unsafe fn create_overlay_window(
     Ok(hwnd)
 }
 
-unsafe fn run_overlay(params: &OverlayParams) -> std::result::Result<(), Box<dyn std::error::Error>> {
+unsafe fn run_overlay(
+    params: &OverlayParams,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let h_instance = GetModuleHandleW(None)?;
     let h_instance = HINSTANCE(h_instance.0);
 
     register_overlay_class(h_instance);
     let state = Box::new(WindowState {
-        start_time: std::time::Instant::now(),
-        fade_state: FadeState::FadeIn,
+        animation: FadeAnimation::new(
+            params.bg_color.3,
+            params.fade_duration,
+            params.hold_duration,
+        ),
         current_alpha: 0,
-        target_alpha: params.bg_color.3,
-        fade_duration: params.fade_duration,
-        hold_duration: params.hold_duration,
         fps: params.fps,
         bg_color: params.bg_color,
         time_str: params.time_str.clone(),
@@ -217,7 +213,15 @@ unsafe fn paint_overlay(hwnd: HWND) {
     let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
     let (r, g, b, time_str, font_size, font_name, fg_color) = if !state_ptr.is_null() {
         let state = &*state_ptr;
-        (state.bg_color.0, state.bg_color.1, state.bg_color.2, state.time_str.as_str(), state.font_size, state.font_name.as_str(), state.fg_color)
+        (
+            state.bg_color.0,
+            state.bg_color.1,
+            state.bg_color.2,
+            state.time_str.as_str(),
+            state.font_size,
+            state.font_name.as_str(),
+            state.fg_color,
+        )
     } else {
         (255, 255, 255, "", 72, "Arial", Rgba(255, 255, 255, 255))
     };
@@ -229,7 +233,12 @@ unsafe fn paint_overlay(hwnd: HWND) {
 
     let color = COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16));
     let brush = CreateSolidBrush(color);
-    let mem_rect = RECT { left: 0, top: 0, right: width, bottom: height };
+    let mem_rect = RECT {
+        left: 0,
+        top: 0,
+        right: width,
+        bottom: height,
+    };
     FillRect(mem_dc, &mem_rect, brush);
     let _ = DeleteObject(brush);
 
@@ -263,7 +272,8 @@ unsafe fn paint_overlay(hwnd: HWND) {
     FillRect(text_dc, &mem_rect, black_brush);
     let _ = DeleteObject(black_brush);
 
-    let text_color = COLORREF((fg_color.0 as u32) | ((fg_color.1 as u32) << 8) | ((fg_color.2 as u32) << 16));
+    let text_color =
+        COLORREF((fg_color.0 as u32) | ((fg_color.1 as u32) << 8) | ((fg_color.2 as u32) << 16));
     SetTextColor(text_dc, text_color);
     SetBkMode(text_dc, TRANSPARENT);
 
@@ -282,7 +292,9 @@ unsafe fn paint_overlay(hwnd: HWND) {
         SourceConstantAlpha: alpha,
         AlphaFormat: 0,
     };
-    let _ = AlphaBlend(mem_dc, 0, 0, width, height, text_dc, 0, 0, width, height, blend_fn);
+    let _ = AlphaBlend(
+        mem_dc, 0, 0, width, height, text_dc, 0, 0, width, height, blend_fn,
+    );
 
     SelectObject(text_dc, old_font);
     let _ = DeleteObject(font);
@@ -304,50 +316,28 @@ unsafe fn update_fade_state(hwnd: HWND) -> LRESULT {
     let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
     if !state_ptr.is_null() {
         let state = &mut *state_ptr;
-        let elapsed = state.start_time.elapsed().as_secs_f64();
-        let target_alpha = state.target_alpha;
-        let fade_duration = state.fade_duration.max(0.1);
+        let input_received = INPUT_RECEIVED.load(Ordering::SeqCst);
 
-        match state.fade_state {
-            FadeState::FadeIn => {
-                let progress = elapsed / fade_duration;
-                if progress >= 1.0 {
-                    state.current_alpha = target_alpha;
-                    state.fade_state = FadeState::Hold;
-                    state.start_time = std::time::Instant::now();
-                } else {
-                    state.current_alpha = (target_alpha as f64 * progress) as u8;
-                }
+        match state.animation.tick(input_received) {
+            AnimationUpdate::Continue(alpha) => {
+                state.current_alpha = alpha;
+                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
+                let _ = InvalidateRect(hwnd, None, false);
             }
-            FadeState::Hold => {
-                state.current_alpha = target_alpha;
-                let hold_elapsed = state.start_time.elapsed().as_secs_f64();
-                let min_hold = state.hold_duration[0];
-                let max_hold = state.hold_duration[1];
-                // Exit hold if min time passed and (input received or max time reached)
-                if hold_elapsed >= min_hold && (hold_elapsed >= max_hold || INPUT_RECEIVED.load(Ordering::SeqCst)) {
-                    state.fade_state = FadeState::FadeOut;
-                    state.start_time = std::time::Instant::now();
-                }
-            }
-            FadeState::FadeOut => {
-                let progress = elapsed / fade_duration;
-                if progress >= 1.0 {
-                    let _ = DestroyWindow(hwnd);
-                    return LRESULT(0);
-                } else {
-                    state.current_alpha = (target_alpha as f64 * (1.0 - progress)) as u8;
-                }
+            AnimationUpdate::Close => {
+                let _ = DestroyWindow(hwnd);
             }
         }
-
-        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), state.current_alpha, LWA_ALPHA);
-        let _ = InvalidateRect(hwnd, None, false);
     }
     LRESULT(0)
 }
 
-unsafe extern "system" fn overlay_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn overlay_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     match msg {
         WM_NCCREATE => {
             let create_struct = lparam.0 as *const CREATESTRUCTW;
@@ -361,9 +351,7 @@ unsafe extern "system" fn overlay_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
             paint_overlay(hwnd);
             LRESULT(0)
         }
-        WM_ERASEBKGND => {
-            LRESULT(1)
-        }
+        WM_ERASEBKGND => LRESULT(1),
         WM_CREATE => {
             let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
             let timer_interval = if !state_ptr.is_null() {
@@ -375,9 +363,7 @@ unsafe extern "system" fn overlay_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
             SetTimer(hwnd, 1, timer_interval, None);
             LRESULT(0)
         }
-        WM_TIMER => {
-            update_fade_state(hwnd)
-        }
+        WM_TIMER => update_fade_state(hwnd),
         WM_DESTROY => {
             let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
             if !state_ptr.is_null() {

@@ -14,6 +14,44 @@ cargo build --release
 cargo run
 ```
 
+### Linux Cross-Compile
+
+On Linux, install the Windows GNU Rust target and a MinGW-w64 toolchain before building:
+
+```bash
+rustup target add x86_64-pc-windows-gnu
+```
+
+Install MinGW-w64 with the system package manager. Examples:
+
+```bash
+# Debian/Ubuntu
+sudo apt install gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+
+# Arch Linux
+sudo pacman -S --needed mingw-w64-gcc mingw-w64-binutils mingw-w64-crt
+```
+
+Build the Windows executable from Linux:
+
+```bash
+cargo build --release --target x86_64-pc-windows-gnu
+```
+
+The output is:
+
+```text
+target/x86_64-pc-windows-gnu/release/scremind.exe
+```
+
+For test verification on Linux, compile Windows tests without running them:
+
+```bash
+cargo test --target x86_64-pc-windows-gnu --no-run
+```
+
+Do not use plain `cargo test` on Linux; this project imports Windows-only APIs and is not expected to compile for the Linux host target.
+
 The build uses `embed-resource` to embed the icon from `assets/app.rc` into the executable. The `#![windows_subsystem = "windows"]` attribute suppresses the console window.
 
 ## Project Structure
@@ -48,4 +86,4 @@ Creates/removes a `.lnk` shortcut in `%APPDATA%\Microsoft\Windows\Start Menu\Pro
 - Config struct fields use `#[serde(default)]` with standalone default functions. Follow this pattern when adding new config fields.
 - The overlay uses double buffering (memory DC + BitBlt) to prevent flickering. Maintain this when modifying paint logic.
 - Global mutable state uses `Mutex` or `AtomicBool`. Be mindful of lock ordering to avoid deadlocks.
-- The `get_current_time()` in `timer.rs` hardcodes UTC+8 offset. This is intentional for the author's timezone.
+- Reminder scheduling uses Windows local system time via `GetLocalTime`.

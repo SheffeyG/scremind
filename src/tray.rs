@@ -1,9 +1,9 @@
 use std::mem;
+use windows::core::w;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::w;
 
 use crate::autostart;
 use crate::timer;
@@ -42,7 +42,12 @@ pub unsafe fn create_nid(hwnd: HWND) -> NOTIFYICONDATAW {
     nid
 }
 
-pub unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+pub unsafe extern "system" fn wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     match msg {
         WM_TRAYICON => {
             if lparam.0 as u32 == WM_RBUTTONUP {
@@ -51,7 +56,7 @@ pub unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
             LRESULT(0)
         }
         WM_TIMER => {
-            timer::tick(crate::config());
+            crate::dispatch_reminders(timer::tick(crate::config()));
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -75,7 +80,7 @@ unsafe fn show_menu(hwnd: HWND) {
             h_menu,
             MF_STRING | MF_DISABLED,
             0,
-            windows::core::PCWSTR(next_text_wide.as_ptr())
+            windows::core::PCWSTR(next_text_wide.as_ptr()),
         );
 
         let scheduled = timer::get_schedule_reminders();
@@ -88,17 +93,31 @@ unsafe fn show_menu(hwnd: HWND) {
                     h_menu,
                     MF_STRING | MF_DISABLED,
                     0,
-                    windows::core::PCWSTR(text_wide.as_ptr())
+                    windows::core::PCWSTR(text_wide.as_ptr()),
                 );
             }
         }
 
         let _ = AppendMenuW(h_menu, MF_SEPARATOR, 0, w!(""));
 
-        let autostart_checked = if autostart::is_enabled() { MF_CHECKED } else { MENU_ITEM_FLAGS(0) };
-        let _ = AppendMenuW(h_menu, MF_STRING | autostart_checked, ID_TRAY_AUTOSTART as usize, w!("Auto start"));
+        let autostart_checked = if autostart::is_enabled() {
+            MF_CHECKED
+        } else {
+            MENU_ITEM_FLAGS(0)
+        };
+        let _ = AppendMenuW(
+            h_menu,
+            MF_STRING | autostart_checked,
+            ID_TRAY_AUTOSTART as usize,
+            w!("Auto start"),
+        );
 
-        let _ = AppendMenuW(h_menu, MF_STRING, ID_TRAY_RESET as usize, w!("Reset"));
+        let _ = AppendMenuW(
+            h_menu,
+            MF_STRING,
+            ID_TRAY_RESET as usize,
+            w!("Reset and Remind"),
+        );
         let _ = AppendMenuW(h_menu, MF_STRING, ID_TRAY_EXIT as usize, w!("Exit"));
 
         let _ = SetForegroundWindow(hwnd);
@@ -117,8 +136,8 @@ unsafe fn show_menu(hwnd: HWND) {
             log::info!("Exit selected from tray menu");
             crate::shutdown(hwnd);
         } else if cmd.0 == ID_TRAY_RESET as i32 {
-            log::info!("Reset selected from tray menu");
-            timer::reset_timer(crate::config());
+            log::info!("Reset and Remind selected from tray menu");
+            crate::dispatch_reminders(timer::reset_timer(crate::config()));
         } else if cmd.0 == ID_TRAY_AUTOSTART as i32 {
             match autostart::toggle() {
                 Ok(enabled) => {
