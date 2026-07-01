@@ -1,2 +1,2 @@
 #define FACE_ICON 101
-FACE_ICON ICON "app.ico"
+FACE_ICON ICON "assets/app.ico"
