@@ -64,8 +64,7 @@ pub fn get_schedule_reminders() -> Vec<String> {
 }
 
 pub fn tick_timer() -> Vec<ReminderEvent> {
-    let state = app_state();
-    state.timer().lock().unwrap().tick(state.config())
+    app_state().timer().lock().unwrap().tick()
 }
 
 pub fn reset_timer() {

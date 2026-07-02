@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use windows::Win32::System::SystemInformation::GetLocalTime;
 
-use crate::config::{Config, ScheduleReminder};
+use crate::config::{Config, Rgba, ScheduleReminder};
 use crate::reminder::{ReminderEvent, ReminderKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,6 +24,7 @@ pub struct TimerState {
     pending_interval_reminder: bool,
     last_time: Option<ClockTime>,
     interval: Duration,
+    interval_bg_color: Rgba,
     schedule_reminder: Vec<ScheduleReminder>,
 }
 
@@ -35,6 +36,7 @@ impl TimerState {
             pending_interval_reminder: false,
             last_time: None,
             interval,
+            interval_bg_color: config.interval_reminder.bg_color,
             schedule_reminder: config.schedule_reminder.clone(),
         }
     }
@@ -63,24 +65,23 @@ impl TimerState {
             .collect()
     }
 
-    pub fn tick(&mut self, config: &Config) -> Vec<ReminderEvent> {
+    pub fn tick(&mut self) -> Vec<ReminderEvent> {
         let current_time = current_time();
 
-        let schedule_events = self.collect_schedule_reminder_events(current_time);
-        if !schedule_events.is_empty() {
-            return schedule_events;
+        if let Some(event) = self.collect_schedule_event(current_time) {
+            return vec![event];
         }
 
-        if let Some(event) = self.collect_interval_reminder_event(config, current_time) {
+        if let Some(event) = self.collect_interval_event(current_time) {
             return vec![event];
         }
 
         Vec::new()
     }
 
-    fn collect_schedule_reminder_events(&mut self, current_time: ClockTime) -> Vec<ReminderEvent> {
+    fn collect_schedule_event(&mut self, current_time: ClockTime) -> Option<ReminderEvent> {
         if self.last_time == Some(current_time) {
-            return Vec::new();
+            return None;
         }
 
         self.last_time = Some(current_time);
@@ -90,25 +91,20 @@ impl TimerState {
             .iter()
             .find(|reminder| reminder.time == current_time_str)
             .map(|reminder| {
-                vec![ReminderEvent::new(
+                ReminderEvent::new(
                     ReminderKind::Schedule,
                     reminder.bg_color,
                     current_time.to_string(),
-                )]
+                )
             })
-            .unwrap_or_default()
     }
 
-    fn collect_interval_reminder_event(
-        &mut self,
-        config: &Config,
-        current_time: ClockTime,
-    ) -> Option<ReminderEvent> {
+    fn collect_interval_event(&mut self, current_time: ClockTime) -> Option<ReminderEvent> {
         if self.pending_interval_reminder {
             self.pending_interval_reminder = false;
             return Some(ReminderEvent::new(
                 ReminderKind::Interval,
-                config.interval_reminder.bg_color,
+                self.interval_bg_color,
                 current_time.to_string(),
             ));
         }
@@ -121,7 +117,7 @@ impl TimerState {
         self.next_interval_at = now + self.interval;
         Some(ReminderEvent::new(
             ReminderKind::Interval,
-            config.interval_reminder.bg_color,
+            self.interval_bg_color,
             current_time.to_string(),
         ))
     }
@@ -168,20 +164,23 @@ mod tests {
         let config = test_config();
         let mut state = TimerState::new(&config);
 
-        let first = state.collect_schedule_reminder_events(ClockTime {
+        let first = state.collect_schedule_event(ClockTime {
             hour: 9,
             minute: 30,
         });
-        let second = state.collect_schedule_reminder_events(ClockTime {
+        let second = state.collect_schedule_event(ClockTime {
             hour: 9,
             minute: 30,
         });
 
-        assert_eq!(first.len(), 1);
-        assert!(first
-            .iter()
-            .all(|event| event.kind == ReminderKind::Schedule));
-        assert!(second.is_empty());
+        assert!(matches!(
+            first,
+            Some(ReminderEvent {
+                kind: ReminderKind::Schedule,
+                ..
+            })
+        ));
+        assert!(second.is_none());
     }
 
     #[test]
@@ -191,15 +190,18 @@ mod tests {
         let now = Instant::now();
         state.next_interval_at = now;
 
-        let events = state.collect_schedule_reminder_events(ClockTime {
+        let event = state.collect_schedule_event(ClockTime {
             hour: 9,
             minute: 30,
         });
 
-        assert_eq!(events.len(), 1);
-        assert!(events
-            .iter()
-            .all(|event| event.kind == ReminderKind::Schedule));
+        assert!(matches!(
+            event,
+            Some(ReminderEvent {
+                kind: ReminderKind::Schedule,
+                ..
+            })
+        ));
         assert_eq!(state.next_interval_at, now);
     }
 
@@ -210,13 +212,10 @@ mod tests {
         state.request_interval_reminder();
 
         let events = state
-            .collect_interval_reminder_event(
-                &config,
-                ClockTime {
-                    hour: 9,
-                    minute: 31,
-                },
-            )
+            .collect_interval_event(ClockTime {
+                hour: 9,
+                minute: 31,
+            })
             .into_iter()
             .collect::<Vec<_>>();
 
@@ -239,13 +238,10 @@ mod tests {
         state.next_interval_at = now;
 
         let events = state
-            .collect_interval_reminder_event(
-                &config,
-                ClockTime {
-                    hour: 9,
-                    minute: 31,
-                },
-            )
+            .collect_interval_event(ClockTime {
+                hour: 9,
+                minute: 31,
+            })
             .into_iter()
             .collect::<Vec<_>>();
 
