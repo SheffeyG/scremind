@@ -1,5 +1,4 @@
 use std::fmt;
-use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use windows::Win32::System::SystemInformation::GetLocalTime;
@@ -7,10 +6,8 @@ use windows::Win32::System::SystemInformation::GetLocalTime;
 use crate::config::{Config, ScheduleReminder};
 use crate::reminder::{ReminderEvent, ReminderKind};
 
-pub static TIMER_STATE: OnceLock<Mutex<TimerState>> = OnceLock::new();
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ClockTime {
+pub(crate) struct ClockTime {
     hour: u32,
     minute: u32,
 }
@@ -40,98 +37,72 @@ impl TimerState {
         }
     }
 
-    fn reset_interval(&mut self, now: Instant) {
+    pub fn reset_interval_after(&mut self, delay: Duration) {
+        self.next_interval_at = Instant::now() + delay;
+    }
+
+    pub fn remaining_time(&self) -> u64 {
+        remaining_minutes_until(self.next_interval_at, Instant::now())
+    }
+
+    pub fn schedule_reminders(&self) -> Vec<String> {
+        self.schedule_reminder
+            .iter()
+            .map(|r| r.time.clone())
+            .collect()
+    }
+
+    pub fn tick(&mut self, config: &Config) -> Vec<ReminderEvent> {
+        let current_time = current_time();
+
+        let schedule_events = self.collect_schedule_reminder_events(current_time);
+        if !schedule_events.is_empty() {
+            return schedule_events;
+        }
+
+        self.collect_interval_reminder_event(config, current_time)
+            .into_iter()
+            .collect()
+    }
+
+    fn collect_schedule_reminder_events(&mut self, current_time: ClockTime) -> Vec<ReminderEvent> {
+        if self.last_time == Some(current_time) {
+            return Vec::new();
+        }
+
+        self.last_time = Some(current_time);
+        let current_time_str = current_time.to_string();
+
+        self.schedule_reminder
+            .iter()
+            .filter(|reminder| reminder.time == current_time_str)
+            .map(|reminder| {
+                ReminderEvent::new(
+                    ReminderKind::Schedule,
+                    reminder.bg_color,
+                    current_time.to_string(),
+                )
+            })
+            .collect()
+    }
+
+    fn collect_interval_reminder_event(
+        &mut self,
+        config: &Config,
+        current_time: ClockTime,
+    ) -> Option<ReminderEvent> {
+        let now = Instant::now();
+        if now < self.next_interval_at {
+            return None;
+        }
+
         self.next_interval_at = now + self.interval;
-    }
-}
-
-pub fn init(config: &Config) {
-    let state = TimerState::new(config);
-    TIMER_STATE
-        .set(Mutex::new(state))
-        .expect("TimerState already initialized");
-    log::info!(
-        "Timer initialized: interval={}s",
-        config.interval_reminder.interval
-    );
-}
-
-pub fn get_remaining_time() -> u64 {
-    let state = TIMER_STATE.get().unwrap().lock().unwrap();
-    remaining_minutes_until(state.next_interval_at, Instant::now())
-}
-
-pub fn get_schedule_reminders() -> Vec<String> {
-    let state = TIMER_STATE.get().unwrap().lock().unwrap();
-    state
-        .schedule_reminder
-        .iter()
-        .map(|r| r.time.clone())
-        .collect()
-}
-
-pub fn tick(config: &Config) -> Vec<ReminderEvent> {
-    let mut state = TIMER_STATE.get().unwrap().lock().unwrap();
-    collect_due_reminders(&mut state, config, Instant::now(), get_current_time())
-}
-
-pub fn reset_timer(config: &Config) -> Vec<ReminderEvent> {
-    let time = {
-        let mut state = TIMER_STATE.get().unwrap().lock().unwrap();
-        state.reset_interval(Instant::now());
-        get_current_time()
-    };
-
-    vec![ReminderEvent::new(
-        ReminderKind::Interval,
-        config.interval_reminder.bg_color,
-        time.to_string(),
-    )]
-}
-
-fn collect_due_reminders(
-    state: &mut TimerState,
-    config: &Config,
-    now: Instant,
-    current_time: ClockTime,
-) -> Vec<ReminderEvent> {
-    let events = collect_schedule_events(state, current_time);
-    if !events.is_empty() {
-        return events;
-    }
-
-    if now >= state.next_interval_at {
-        state.reset_interval(now);
-        return vec![ReminderEvent::new(
+        Some(ReminderEvent::new(
             ReminderKind::Interval,
             config.interval_reminder.bg_color,
             current_time.to_string(),
-        )];
+        ))
     }
-
-    Vec::new()
-}
-
-fn collect_schedule_events(state: &mut TimerState, current_time: ClockTime) -> Vec<ReminderEvent> {
-    if state.last_time == Some(current_time) {
-        return Vec::new();
-    }
-
-    state.last_time = Some(current_time);
-    let current_time_str = current_time.to_string();
-
-    state
-        .schedule_reminder
-        .iter()
-        .filter(|reminder| reminder.time == current_time_str)
-        .map(|reminder| {
-            ReminderEvent::new(
-                ReminderKind::Schedule,
-                reminder.bg_color,
-                current_time.to_string(),
-            )
-        })
-        .collect()
 }
 
 fn remaining_minutes_until(deadline: Instant, now: Instant) -> u64 {
@@ -139,7 +110,7 @@ fn remaining_minutes_until(deadline: Instant, now: Instant) -> u64 {
     (remaining_secs + 59) / 60
 }
 
-fn get_current_time() -> ClockTime {
+fn current_time() -> ClockTime {
     unsafe {
         let time = GetLocalTime();
 
@@ -179,26 +150,15 @@ mod tests {
     fn schedule_events_trigger_once_per_minute() {
         let config = test_config();
         let mut state = TimerState::new(&config);
-        let now = Instant::now();
 
-        let first = collect_due_reminders(
-            &mut state,
-            &config,
-            now,
-            ClockTime {
-                hour: 9,
-                minute: 30,
-            },
-        );
-        let second = collect_due_reminders(
-            &mut state,
-            &config,
-            now,
-            ClockTime {
-                hour: 9,
-                minute: 30,
-            },
-        );
+        let first = state.collect_schedule_reminder_events(ClockTime {
+            hour: 9,
+            minute: 30,
+        });
+        let second = state.collect_schedule_reminder_events(ClockTime {
+            hour: 9,
+            minute: 30,
+        });
 
         assert_eq!(first.len(), 2);
         assert!(first
@@ -214,15 +174,10 @@ mod tests {
         let now = Instant::now();
         state.next_interval_at = now;
 
-        let events = collect_due_reminders(
-            &mut state,
-            &config,
-            now,
-            ClockTime {
-                hour: 9,
-                minute: 30,
-            },
-        );
+        let events = state.collect_schedule_reminder_events(ClockTime {
+            hour: 9,
+            minute: 30,
+        });
 
         assert_eq!(events.len(), 2);
         assert!(events
@@ -238,15 +193,16 @@ mod tests {
         let now = Instant::now();
         state.next_interval_at = now;
 
-        let events = collect_due_reminders(
-            &mut state,
-            &config,
-            now,
-            ClockTime {
-                hour: 9,
-                minute: 31,
-            },
-        );
+        let events = state
+            .collect_interval_reminder_event(
+                &config,
+                ClockTime {
+                    hour: 9,
+                    minute: 31,
+                },
+            )
+            .into_iter()
+            .collect::<Vec<_>>();
 
         assert_eq!(
             events,

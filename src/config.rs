@@ -5,7 +5,7 @@ use std::path::Path;
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
 pub struct Rgba(pub u8, pub u8, pub u8, pub u8);
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub overlay: OverlayConfig,
@@ -16,7 +16,7 @@ pub struct Config {
     #[serde(default)]
     pub interval_reminder: IntervalReminder,
 
-    #[serde(default)]
+    #[serde(default = "default_schedule_reminder")]
     pub schedule_reminder: Vec<ScheduleReminder>,
 }
 
@@ -62,11 +62,11 @@ pub struct ForegroundConfig {
 }
 
 fn default_fade_duration() -> f64 {
-    1.0
+    2.0
 }
 
 fn default_hold_duration() -> [f64; 2] {
-    [1.0, 5.0]
+    [3.0, 5.0]
 }
 
 fn default_fps() -> u32 {
@@ -78,7 +78,7 @@ fn default_interval() -> u64 {
 }
 
 fn default_bg_color() -> Rgba {
-    Rgba(255, 255, 255, 30)
+    Rgba(19, 65, 52, 220)
 }
 
 fn default_fg_color() -> Rgba {
@@ -91,6 +91,24 @@ fn default_font_size() -> i32 {
 
 fn default_font_name() -> String {
     "Arial".to_string()
+}
+
+fn default_schedule_reminder() -> Vec<ScheduleReminder> {
+    vec![ScheduleReminder {
+        time: "12:00".to_string(),
+        bg_color: Rgba(255, 95, 95, 180),
+    }]
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            overlay: OverlayConfig::default(),
+            foreground: ForegroundConfig::default(),
+            interval_reminder: IntervalReminder::default(),
+            schedule_reminder: default_schedule_reminder(),
+        }
+    }
 }
 
 impl Default for IntervalReminder {

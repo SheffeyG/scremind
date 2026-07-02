@@ -6,12 +6,39 @@ use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::autostart;
-use crate::timer;
 
 const WM_TRAYICON: u32 = WM_USER + 1;
 const ID_TRAY_EXIT: u32 = 1001;
 const ID_TRAY_RESET: u32 = 1002;
 const ID_TRAY_AUTOSTART: u32 = 1003;
+
+pub unsafe fn create_window() -> std::result::Result<HWND, Box<dyn std::error::Error>> {
+    let h_instance = GetModuleHandleW(None)?;
+
+    let wnd_class = WNDCLASSW {
+        lpfnWndProc: Some(wnd_proc),
+        hInstance: h_instance.into(),
+        lpszClassName: w!("TrayWindowClass"),
+        ..mem::zeroed()
+    };
+
+    RegisterClassW(&wnd_class);
+
+    Ok(CreateWindowExW(
+        WS_EX_NOACTIVATE,
+        w!("TrayWindowClass"),
+        w!("Screen Reminder"),
+        WS_OVERLAPPED,
+        0,
+        0,
+        0,
+        0,
+        None,
+        None,
+        h_instance,
+        None,
+    )?)
+}
 
 pub unsafe fn create_nid(hwnd: HWND) -> NOTIFYICONDATAW {
     let h_instance = GetModuleHandleW(None).unwrap_or_default();
@@ -56,7 +83,7 @@ pub unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_TIMER => {
-            crate::dispatch_reminders(timer::tick(crate::config()));
+            crate::app::dispatch_reminders(crate::app::tick_timer());
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -73,7 +100,7 @@ unsafe fn show_menu(hwnd: HWND) {
 
     let h_menu = CreatePopupMenu().ok();
     if let Some(h_menu) = h_menu {
-        let remaining = timer::get_remaining_time();
+        let remaining = crate::app::get_remaining_time();
         let next_text = format!("Next break in {} mins\0", remaining);
         let next_text_wide: Vec<u16> = next_text.encode_utf16().collect();
         let _ = AppendMenuW(
@@ -83,7 +110,7 @@ unsafe fn show_menu(hwnd: HWND) {
             windows::core::PCWSTR(next_text_wide.as_ptr()),
         );
 
-        let scheduled = timer::get_schedule_reminders();
+        let scheduled = crate::app::get_schedule_reminders();
         if !scheduled.is_empty() {
             let _ = AppendMenuW(h_menu, MF_SEPARATOR, 0, w!(""));
             for reminder in &scheduled {
@@ -112,12 +139,7 @@ unsafe fn show_menu(hwnd: HWND) {
             w!("Auto start"),
         );
 
-        let _ = AppendMenuW(
-            h_menu,
-            MF_STRING,
-            ID_TRAY_RESET as usize,
-            w!("Reset and Remind"),
-        );
+        let _ = AppendMenuW(h_menu, MF_STRING, ID_TRAY_RESET as usize, w!("Reset"));
         let _ = AppendMenuW(h_menu, MF_STRING, ID_TRAY_EXIT as usize, w!("Exit"));
 
         let _ = SetForegroundWindow(hwnd);
@@ -134,10 +156,10 @@ unsafe fn show_menu(hwnd: HWND) {
 
         if cmd.0 == ID_TRAY_EXIT as i32 {
             log::info!("Exit selected from tray menu");
-            crate::shutdown(hwnd);
+            crate::app::shutdown(hwnd);
         } else if cmd.0 == ID_TRAY_RESET as i32 {
-            log::info!("Reset and Remind selected from tray menu");
-            crate::dispatch_reminders(timer::reset_timer(crate::config()));
+            log::info!("Reset selected from tray menu");
+            crate::app::reset_timer();
         } else if cmd.0 == ID_TRAY_AUTOSTART as i32 {
             match autostart::toggle() {
                 Ok(enabled) => {
