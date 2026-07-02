@@ -22,6 +22,11 @@ pub struct FadeAnimation {
     hold_duration: [f64; 2],
 }
 
+fn smootherstep(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+}
+
 impl FadeAnimation {
     pub fn new(target_alpha: u8, fade_duration: f64, hold_duration: [f64; 2]) -> Self {
         Self {
@@ -47,7 +52,8 @@ impl FadeAnimation {
             self.transition_to(FadeState::Hold);
             AnimationUpdate::Continue(self.target_alpha)
         } else {
-            AnimationUpdate::Continue((self.target_alpha as f64 * progress) as u8)
+            let eased = smootherstep(progress);
+            AnimationUpdate::Continue((self.target_alpha as f64 * eased) as u8)
         }
     }
 
@@ -68,7 +74,8 @@ impl FadeAnimation {
         if progress >= 1.0 {
             AnimationUpdate::Close
         } else {
-            AnimationUpdate::Continue((self.target_alpha as f64 * (1.0 - progress)) as u8)
+            let eased = smootherstep(progress);
+            AnimationUpdate::Continue((self.target_alpha as f64 * (1.0 - eased)) as u8)
         }
     }
 
