@@ -20,7 +20,7 @@ pub struct Config {
     pub schedule_reminder: Vec<ScheduleReminder>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OverlayConfig {
     #[serde(default = "default_fade_duration")]
     pub fade_duration: f64,
@@ -98,6 +98,16 @@ fn default_schedule_reminder() -> Vec<ScheduleReminder> {
         time: "12:00".to_string(),
         bg_color: Rgba(255, 95, 95, 180),
     }]
+}
+
+impl Default for OverlayConfig {
+    fn default() -> Self {
+        OverlayConfig {
+            fade_duration: default_fade_duration(),
+            hold_duration: default_hold_duration(),
+            fps: default_fps(),
+        }
+    }
 }
 
 impl Default for Config {
