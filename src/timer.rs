@@ -7,7 +7,7 @@ use crate::config::{Config, ScheduleReminder};
 use crate::reminder::{ReminderEvent, ReminderKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ClockTime {
+struct ClockTime {
     hour: u32,
     minute: u32,
 }
@@ -21,6 +21,7 @@ impl fmt::Display for ClockTime {
 #[derive(Debug)]
 pub struct TimerState {
     next_interval_at: Instant,
+    pending_interval_reminder: bool,
     last_time: Option<ClockTime>,
     interval: Duration,
     schedule_reminder: Vec<ScheduleReminder>,
@@ -31,18 +32,28 @@ impl TimerState {
         let interval = Duration::from_secs(config.interval_reminder.interval);
         TimerState {
             next_interval_at: Instant::now() + interval,
+            pending_interval_reminder: false,
             last_time: None,
             interval,
             schedule_reminder: config.schedule_reminder.clone(),
         }
     }
 
-    pub fn reset_interval_after(&mut self, delay: Duration) {
-        self.next_interval_at = Instant::now() + delay;
+    pub fn reset_interval(&mut self) {
+        self.next_interval_at = Instant::now() + self.interval;
+    }
+
+    pub fn request_interval_reminder(&mut self) {
+        self.pending_interval_reminder = true;
     }
 
     pub fn remaining_time(&self) -> u64 {
-        remaining_minutes_until(self.next_interval_at, Instant::now())
+        let remaining_secs = self
+            .next_interval_at
+            .saturating_duration_since(Instant::now())
+            .as_secs();
+
+        (remaining_secs + 59) / 60
     }
 
     pub fn schedule_reminders(&self) -> Vec<String> {
@@ -60,9 +71,11 @@ impl TimerState {
             return schedule_events;
         }
 
-        self.collect_interval_reminder_event(config, current_time)
-            .into_iter()
-            .collect()
+        if let Some(event) = self.collect_interval_reminder_event(config, current_time) {
+            return vec![event];
+        }
+
+        Vec::new()
     }
 
     fn collect_schedule_reminder_events(&mut self, current_time: ClockTime) -> Vec<ReminderEvent> {
@@ -75,15 +88,15 @@ impl TimerState {
 
         self.schedule_reminder
             .iter()
-            .filter(|reminder| reminder.time == current_time_str)
+            .find(|reminder| reminder.time == current_time_str)
             .map(|reminder| {
-                ReminderEvent::new(
+                vec![ReminderEvent::new(
                     ReminderKind::Schedule,
                     reminder.bg_color,
                     current_time.to_string(),
-                )
+                )]
             })
-            .collect()
+            .unwrap_or_default()
     }
 
     fn collect_interval_reminder_event(
@@ -91,6 +104,15 @@ impl TimerState {
         config: &Config,
         current_time: ClockTime,
     ) -> Option<ReminderEvent> {
+        if self.pending_interval_reminder {
+            self.pending_interval_reminder = false;
+            return Some(ReminderEvent::new(
+                ReminderKind::Interval,
+                config.interval_reminder.bg_color,
+                current_time.to_string(),
+            ));
+        }
+
         let now = Instant::now();
         if now < self.next_interval_at {
             return None;
@@ -103,11 +125,6 @@ impl TimerState {
             current_time.to_string(),
         ))
     }
-}
-
-fn remaining_minutes_until(deadline: Instant, now: Instant) -> u64 {
-    let remaining_secs = deadline.saturating_duration_since(now).as_secs();
-    (remaining_secs + 59) / 60
 }
 
 fn current_time() -> ClockTime {
@@ -147,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn schedule_events_trigger_once_per_minute() {
+    fn schedule_event_triggers_once_per_minute() {
         let config = test_config();
         let mut state = TimerState::new(&config);
 
@@ -160,7 +177,7 @@ mod tests {
             minute: 30,
         });
 
-        assert_eq!(first.len(), 2);
+        assert_eq!(first.len(), 1);
         assert!(first
             .iter()
             .all(|event| event.kind == ReminderKind::Schedule));
@@ -179,11 +196,39 @@ mod tests {
             minute: 30,
         });
 
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 1);
         assert!(events
             .iter()
             .all(|event| event.kind == ReminderKind::Schedule));
         assert_eq!(state.next_interval_at, now);
+    }
+
+    #[test]
+    fn pending_interval_reminder_triggers_once_before_normal_interval() {
+        let config = test_config();
+        let mut state = TimerState::new(&config);
+        state.request_interval_reminder();
+
+        let events = state
+            .collect_interval_reminder_event(
+                &config,
+                ClockTime {
+                    hour: 9,
+                    minute: 31,
+                },
+            )
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            events,
+            vec![ReminderEvent::new(
+                ReminderKind::Interval,
+                config.interval_reminder.bg_color,
+                "09:31".to_string(),
+            )]
+        );
+        assert!(!state.pending_interval_reminder);
     }
 
     #[test]
@@ -217,20 +262,20 @@ mod tests {
 
     #[test]
     fn remaining_time_rounds_up_to_minutes() {
+        let config = test_config();
+        let mut state = TimerState::new(&config);
         let now = Instant::now();
 
-        assert_eq!(remaining_minutes_until(now, now), 0);
-        assert_eq!(
-            remaining_minutes_until(now + Duration::from_secs(1), now),
-            1
-        );
-        assert_eq!(
-            remaining_minutes_until(now + Duration::from_secs(60), now),
-            1
-        );
-        assert_eq!(
-            remaining_minutes_until(now + Duration::from_secs(61), now),
-            2
-        );
+        state.next_interval_at = now;
+        assert_eq!(state.remaining_time(), 0);
+
+        state.next_interval_at = Instant::now() + Duration::from_secs(1);
+        assert_eq!(state.remaining_time(), 1);
+
+        state.next_interval_at = Instant::now() + Duration::from_secs(60);
+        assert_eq!(state.remaining_time(), 1);
+
+        state.next_interval_at = Instant::now() + Duration::from_secs(61);
+        assert_eq!(state.remaining_time(), 2);
     }
 }

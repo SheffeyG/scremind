@@ -1,8 +1,6 @@
+use simplelog::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
-
-use simplelog::*;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -71,11 +69,10 @@ pub fn tick_timer() -> Vec<ReminderEvent> {
 }
 
 pub fn reset_timer() {
-    app_state()
-        .timer()
-        .lock()
-        .unwrap()
-        .reset_interval_after(Duration::from_secs(1));
+    let state = app_state();
+    let mut timer = state.timer().lock().unwrap();
+    timer.reset_interval();
+    timer.request_interval_reminder();
 }
 
 pub fn shutdown(hwnd: HWND) {
@@ -141,6 +138,11 @@ impl App {
         APP_STATE
             .set(AppState::new(config.clone()))
             .expect("AppState already set");
+        app_state()
+            .timer()
+            .lock()
+            .unwrap()
+            .request_interval_reminder();
         log::info!(
             "Config loaded: interval={}s, schedule_count={}",
             config.interval_reminder.interval,
