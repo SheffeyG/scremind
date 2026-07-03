@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::mem;
 use std::sync::Once;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use windows::core::w;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
@@ -17,8 +19,6 @@ use super::render::paint_overlay;
 use super::types::{OverlayParams, OverlayWindowState};
 
 static REGISTER_OVERLAY_CLASS: Once = Once::new();
-
-const OVERLAY_TIMER_ID: usize = 1;
 
 pub struct OverlayRuntime;
 
@@ -51,7 +51,7 @@ impl OverlayRuntime {
             let _ = ShowWindow(hwnd, SW_SHOW);
             let _ = UpdateWindow(hwnd);
 
-            message_loop();
+            message_loop(hwnd);
             Ok(())
         }
     }
@@ -82,7 +82,7 @@ unsafe fn create_overlay_window(
 ) -> Result<HWND, Box<dyn Error>> {
     let state_ptr = Box::into_raw(Box::new(state));
     let hwnd = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+        WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
         w!("OverlayWindowClass"),
         w!("Overlay"),
         WS_POPUP,
@@ -109,11 +109,39 @@ unsafe fn create_overlay_window(
     }
 }
 
-unsafe fn message_loop() {
+unsafe fn message_loop(hwnd: HWND) {
+    let Some(state) = window_state_mut(hwnd) else {
+        log::error!("Overlay message loop missing window state");
+        return;
+    };
+
+    let frame_interval = Duration::from_millis(state.view.timer_interval_ms as u64);
+    let mut next_frame_at = Instant::now();
     let mut msg = MSG::default();
-    while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-        let _ = TranslateMessage(&msg);
-        DispatchMessageW(&msg);
+
+    loop {
+        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).into() {
+            if msg.message == WM_QUIT {
+                return;
+            }
+
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+
+        if !IsWindow(hwnd).as_bool() {
+            return;
+        }
+
+        let now = Instant::now();
+        if now >= next_frame_at {
+            update_animation(hwnd);
+            next_frame_at = now + frame_interval;
+            continue;
+        }
+
+        let sleep_for = (next_frame_at - now).min(Duration::from_millis(1));
+        sleep(sleep_for);
     }
 }
 
@@ -128,7 +156,6 @@ unsafe extern "system" fn overlay_wnd_proc(
         WM_CREATE => handle_create(hwnd),
         WM_PAINT => handle_paint(hwnd),
         WM_ERASEBKGND => LRESULT(1),
-        WM_TIMER => handle_timer(hwnd),
         WM_OVERLAY_INPUT_RECEIVED => handle_input_received(hwnd),
         WM_DESTROY => handle_destroy(hwnd),
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -158,20 +185,11 @@ unsafe fn handle_create(hwnd: HWND) -> LRESULT {
         return LRESULT(-1);
     }
 
-    let timer_interval = state.view.timer_interval_ms;
-    if SetTimer(hwnd, OVERLAY_TIMER_ID, timer_interval, None) == 0 {
-        log::error!(
-            "Failed to start overlay timer: interval={}ms, fps={}",
-            timer_interval,
-            state.view.fps
-        );
-        return LRESULT(-1);
-    }
-
+    let frame_interval = state.view.timer_interval_ms;
     log::info!(
-        "Overlay timer started: time_str={}, interval={}ms, fps={}",
+        "Overlay frame loop started: time_str={}, interval={}ms, fps={}",
         state.view.time_str,
-        timer_interval,
+        frame_interval,
         state.view.fps
     );
 
@@ -188,10 +206,10 @@ unsafe fn handle_paint(hwnd: HWND) -> LRESULT {
     LRESULT(0)
 }
 
-unsafe fn handle_timer(hwnd: HWND) -> LRESULT {
+unsafe fn update_animation(hwnd: HWND) {
     let Some(state) = window_state_mut(hwnd) else {
-        log::error!("Overlay WM_TIMER missing window state");
-        return LRESULT(0);
+        log::error!("Overlay frame update missing window state");
+        return;
     };
 
     match state.runtime.animation.tick(state.runtime.input_received) {
@@ -206,8 +224,6 @@ unsafe fn handle_timer(hwnd: HWND) -> LRESULT {
             let _ = DestroyWindow(hwnd);
         }
     }
-
-    LRESULT(0)
 }
 
 unsafe fn handle_input_received(hwnd: HWND) -> LRESULT {
@@ -221,7 +237,6 @@ unsafe fn handle_input_received(hwnd: HWND) -> LRESULT {
 }
 
 unsafe fn handle_destroy(hwnd: HWND) -> LRESULT {
-    let _ = KillTimer(hwnd, OVERLAY_TIMER_ID);
     clear_active_window(hwnd);
 
     if let Some(state_ptr) = take_window_state(hwnd) {
