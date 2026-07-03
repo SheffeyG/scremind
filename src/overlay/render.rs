@@ -3,7 +3,6 @@ use std::ptr::null_mut;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
 use crate::config::Rgba;
 
@@ -12,6 +11,7 @@ use super::types::{OverlayViewState, OverlayWindowState};
 #[derive(Debug, Default)]
 pub struct OverlayRenderer {
     font: Option<OwnedFont>,
+    cache: Option<SurfaceCache>,
 }
 
 impl OverlayRenderer {
@@ -22,17 +22,55 @@ impl OverlayRenderer {
         Ok(())
     }
 
-    fn font(&self) -> Option<&OwnedFont> {
-        self.font.as_ref()
+    fn font_handle(&self) -> Option<HFONT> {
+        self.font.as_ref().map(|font| font.handle())
     }
+
+    fn ensure_cache(
+        &mut self,
+        source_hdc: HDC,
+        view: &OverlayViewState,
+    ) -> windows::core::Result<()> {
+        if self.cache.is_none() {
+            self.cache = Some(SurfaceCache::new(source_hdc, view.bounds)?);
+            let font = self.font_handle();
+            let cache = self.cache.as_mut().expect("surface cache initialized");
+            paint_background(cache.background.hdc(), &cache.rect, view.bg_color);
+            paint_text_layer(cache.text.hdc(), &cache.rect, view, font);
+        }
+
+        Ok(())
+    }
+
+    fn frame_hdc(&self) -> Option<HDC> {
+        self.cache.as_ref().map(|cache| cache.frame.hdc())
+    }
+
+    fn background_hdc(&self) -> Option<HDC> {
+        self.cache.as_ref().map(|cache| cache.background.hdc())
+    }
+
+    fn text_hdc(&self) -> Option<HDC> {
+        self.cache.as_ref().map(|cache| cache.text.hdc())
+    }
+
+    fn rect(&self) -> Option<RECT> {
+        self.cache.as_ref().map(|cache| cache.rect)
+    }
+}
+
+pub unsafe fn initialize_renderer(
+    hwnd: HWND,
+    state: &mut OverlayWindowState,
+) -> windows::core::Result<()> {
+    let window_dc = WindowDc::acquire(hwnd)?;
+    state.renderer.ensure_font(&state.view)?;
+    state.renderer.ensure_cache(window_dc.hdc(), &state.view)
 }
 
 pub unsafe fn paint_overlay(hwnd: HWND, state: &mut OverlayWindowState) {
     let paint = PaintSession::begin(hwnd);
-    let rect = client_rect(hwnd);
-    if rect.right <= rect.left || rect.bottom <= rect.top {
-        return;
-    }
+    let rect = state.view.bounds;
 
     if let Err(e) = state.renderer.ensure_font(&state.view) {
         log::error!(
@@ -43,39 +81,36 @@ pub unsafe fn paint_overlay(hwnd: HWND, state: &mut OverlayWindowState) {
         return;
     }
 
-    let width = rect.right - rect.left;
-    let height = rect.bottom - rect.top;
-    let Some(frame_surface) = PaintSurface::new(paint.hdc(), width, height) else {
+    if let Err(e) = state.renderer.ensure_cache(paint.hdc(), &state.view) {
         log::error!(
-            "Failed to create overlay frame surface: {}x{}",
-            width,
-            height
+            "Failed to initialize overlay surface cache: {}x{} ({})",
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            e
         );
         return;
+    }
+
+    let Some(frame_hdc) = state.renderer.frame_hdc() else {
+        log::error!("Overlay frame cache missing after initialization");
+        return;
     };
-    let Some(text_surface) = PaintSurface::new(paint.hdc(), width, height) else {
-        log::error!(
-            "Failed to create overlay text surface: {}x{}",
-            width,
-            height
-        );
+    let Some(background_hdc) = state.renderer.background_hdc() else {
+        log::error!("Overlay background cache missing after initialization");
+        return;
+    };
+    let Some(text_hdc) = state.renderer.text_hdc() else {
+        log::error!("Overlay text cache missing after initialization");
+        return;
+    };
+    let Some(cache_rect) = state.renderer.rect() else {
+        log::error!("Overlay cache rect missing after initialization");
         return;
     };
 
-    paint_background(frame_surface.hdc(), &rect, state.view.bg_color);
-    paint_text_layer(
-        text_surface.hdc(),
-        &rect,
-        &state.view,
-        state.renderer.font(),
-    );
-    compose_frame(
-        frame_surface.hdc(),
-        text_surface.hdc(),
-        &rect,
-        state.view.fg_color.3,
-    );
-    blit_frame(paint.hdc(), frame_surface.hdc(), &rect);
+    reset_frame(frame_hdc, background_hdc, &cache_rect);
+    compose_frame(frame_hdc, text_hdc, &cache_rect, state.view.fg_color.3);
+    blit_frame(paint.hdc(), frame_hdc, &cache_rect);
 }
 
 fn paint_background(hdc: HDC, rect: &RECT, bg_color: Rgba) {
@@ -85,7 +120,7 @@ fn paint_background(hdc: HDC, rect: &RECT, bg_color: Rgba) {
     }
 }
 
-fn paint_text_layer(hdc: HDC, rect: &RECT, view: &OverlayViewState, font: Option<&OwnedFont>) {
+fn paint_text_layer(hdc: HDC, rect: &RECT, view: &OverlayViewState, font: Option<HFONT>) {
     let black_brush = OwnedBrush::solid(COLORREF(0));
     unsafe {
         let _ = FillRect(hdc, rect, black_brush.handle());
@@ -95,7 +130,7 @@ fn paint_text_layer(hdc: HDC, rect: &RECT, view: &OverlayViewState, font: Option
         return;
     };
 
-    let _font_guard = unsafe { SelectedFontGuard::select(hdc, font.handle()) };
+    let _font_guard = unsafe { SelectedFontGuard::select(hdc, font) };
     unsafe {
         let _ = SetTextColor(
             hdc,
@@ -110,6 +145,24 @@ fn paint_text_layer(hdc: HDC, rect: &RECT, view: &OverlayViewState, font: Option
             &mut text_wide,
             &mut text_rect,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+        );
+    }
+}
+
+fn reset_frame(frame_hdc: HDC, background_hdc: HDC, rect: &RECT) {
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    unsafe {
+        let _ = BitBlt(
+            frame_hdc,
+            0,
+            0,
+            width,
+            height,
+            background_hdc,
+            0,
+            0,
+            SRCCOPY,
         );
     }
 }
@@ -139,14 +192,6 @@ fn blit_frame(target_hdc: HDC, frame_hdc: HDC, rect: &RECT) {
     }
 }
 
-fn client_rect(hwnd: HWND) -> RECT {
-    let mut rect = RECT::default();
-    unsafe {
-        let _ = GetClientRect(hwnd, &mut rect);
-    }
-    rect
-}
-
 fn rgb_color(r: u8, g: u8, b: u8) -> COLORREF {
     COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16))
 }
@@ -154,6 +199,11 @@ fn rgb_color(r: u8, g: u8, b: u8) -> COLORREF {
 struct PaintSession {
     hwnd: HWND,
     ps: PAINTSTRUCT,
+    hdc: HDC,
+}
+
+struct WindowDc {
+    hwnd: HWND,
     hdc: HDC,
 }
 
@@ -177,6 +227,55 @@ impl Drop for PaintSession {
     }
 }
 
+impl WindowDc {
+    unsafe fn acquire(hwnd: HWND) -> windows::core::Result<Self> {
+        let hdc = GetDC(hwnd);
+        if hdc.0 == null_mut() {
+            Err(windows::core::Error::from_win32())
+        } else {
+            Ok(Self { hwnd, hdc })
+        }
+    }
+
+    fn hdc(&self) -> HDC {
+        self.hdc
+    }
+}
+
+impl Drop for WindowDc {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = ReleaseDC(self.hwnd, self.hdc);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SurfaceCache {
+    rect: RECT,
+    frame: PaintSurface,
+    background: PaintSurface,
+    text: PaintSurface,
+}
+
+impl SurfaceCache {
+    fn new(source_hdc: HDC, rect: RECT) -> windows::core::Result<Self> {
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+
+        Ok(Self {
+            rect,
+            frame: PaintSurface::new(source_hdc, width, height)
+                .ok_or_else(windows::core::Error::from_win32)?,
+            background: PaintSurface::new(source_hdc, width, height)
+                .ok_or_else(windows::core::Error::from_win32)?,
+            text: PaintSurface::new(source_hdc, width, height)
+                .ok_or_else(windows::core::Error::from_win32)?,
+        })
+    }
+}
+
+#[derive(Debug)]
 struct PaintSurface {
     dc: OwnedCompatibleDc,
     _bitmap: OwnedBitmap,
@@ -317,6 +416,7 @@ impl Drop for OwnedFont {
     }
 }
 
+#[derive(Debug)]
 struct SelectedBitmapGuard {
     hdc: HDC,
     old: HGDIOBJ,
@@ -337,6 +437,7 @@ impl Drop for SelectedBitmapGuard {
     }
 }
 
+#[derive(Debug)]
 struct SelectedFontGuard {
     hdc: HDC,
     old: HGDIOBJ,

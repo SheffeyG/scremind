@@ -29,7 +29,14 @@ impl OverlayRuntime {
             let h_instance = HINSTANCE(h_instance.0);
 
             register_overlay_class(h_instance);
-            let hwnd = create_overlay_window(h_instance, OverlayWindowState::new(params))?;
+            let screen_width = GetSystemMetrics(SM_CXSCREEN);
+            let screen_height = GetSystemMetrics(SM_CYSCREEN);
+            let hwnd = create_overlay_window(
+                h_instance,
+                OverlayWindowState::new(params, screen_width, screen_height),
+                screen_width,
+                screen_height,
+            )?;
             set_active_window(hwnd);
 
             let _input_hooks = match InputHookGuards::install(h_instance) {
@@ -70,6 +77,8 @@ unsafe fn register_overlay_class(h_instance: HINSTANCE) {
 unsafe fn create_overlay_window(
     h_instance: HINSTANCE,
     state: OverlayWindowState,
+    screen_width: i32,
+    screen_height: i32,
 ) -> Result<HWND, Box<dyn Error>> {
     let state_ptr = Box::into_raw(Box::new(state));
     let hwnd = CreateWindowExW(
@@ -79,8 +88,8 @@ unsafe fn create_overlay_window(
         WS_POPUP,
         0,
         0,
-        GetSystemMetrics(SM_CXSCREEN),
-        GetSystemMetrics(SM_CYSCREEN),
+        screen_width,
+        screen_height,
         None,
         None,
         h_instance,
@@ -144,6 +153,11 @@ unsafe fn handle_create(hwnd: HWND) -> LRESULT {
         return LRESULT(-1);
     };
 
+    if let Err(e) = super::render::initialize_renderer(hwnd, state) {
+        log::error!("Failed to initialize overlay renderer: {}", e);
+        return LRESULT(-1);
+    }
+
     let timer_interval = state.view.timer_interval_ms;
     if SetTimer(hwnd, OVERLAY_TIMER_ID, timer_interval, None) == 0 {
         log::error!(
@@ -182,9 +196,11 @@ unsafe fn handle_timer(hwnd: HWND) -> LRESULT {
 
     match state.runtime.animation.tick(state.runtime.input_received) {
         AnimationUpdate::Continue(alpha) => {
-            state.runtime.current_alpha = alpha;
-            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
-            let _ = InvalidateRect(hwnd, None, false);
+            if alpha != state.runtime.current_alpha {
+                state.runtime.current_alpha = alpha;
+                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
+                let _ = InvalidateRect(hwnd, None, false);
+            }
         }
         AnimationUpdate::Close => {
             let _ = DestroyWindow(hwnd);

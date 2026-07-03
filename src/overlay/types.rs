@@ -1,3 +1,5 @@
+use windows::Win32::Foundation::RECT;
+
 use crate::animation::FadeAnimation;
 use crate::config::{Config, Rgba};
 
@@ -56,6 +58,7 @@ pub struct OverlayViewState {
     pub bg_color: Rgba,
     pub time_str: String,
     pub time_wide: Vec<u16>,
+    pub bounds: RECT,
     pub fps: u32,
     pub timer_interval_ms: u32,
     pub font_size: i32,
@@ -65,7 +68,7 @@ pub struct OverlayViewState {
 }
 
 impl OverlayViewState {
-    pub fn from_params(params: OverlayParams) -> Self {
+    pub fn from_params(params: OverlayParams, width: i32, height: i32) -> Self {
         let time_wide = params.time_str.encode_utf16().collect();
         let font_name_wide = params
             .font_name
@@ -77,6 +80,12 @@ impl OverlayViewState {
             bg_color: params.bg_color,
             time_str: params.time_str,
             time_wide,
+            bounds: RECT {
+                left: 0,
+                top: 0,
+                right: width,
+                bottom: height,
+            },
             fps: params.fps,
             timer_interval_ms: normalize_timer_interval(params.fps),
             font_size: params.font_size,
@@ -95,10 +104,10 @@ pub struct OverlayWindowState {
 }
 
 impl OverlayWindowState {
-    pub fn new(params: OverlayParams) -> Self {
+    pub fn new(params: OverlayParams, width: i32, height: i32) -> Self {
         Self {
             runtime: OverlayRuntimeState::new(&params),
-            view: OverlayViewState::from_params(params),
+            view: OverlayViewState::from_params(params, width, height),
             renderer: OverlayRenderer::default(),
         }
     }
