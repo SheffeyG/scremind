@@ -40,8 +40,7 @@ fn enable_autostart() -> io::Result<bool> {
         log::info!("Autostart enabled");
         Ok(true)
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
+        Err(io::Error::other(
             "startup shortcut was created but verification failed",
         ))
     }
@@ -58,8 +57,7 @@ fn disable_autostart() -> io::Result<bool> {
         log::info!("Autostart disabled");
         Ok(false)
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
+        Err(io::Error::other(
             "startup shortcut still points to the current executable",
         ))
     }
@@ -118,10 +116,7 @@ fn get_shortcut_target(shortcut_path: &Path) -> io::Result<PathBuf> {
     let output = run_powershell(&ps_script)?;
     let target = output.trim();
     if target.is_empty() {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            "shortcut target is empty",
-        ))
+        Err(io::Error::other("shortcut target is empty"))
     } else {
         Ok(PathBuf::from(target))
     }
@@ -137,10 +132,10 @@ fn run_powershell(script: &str) -> io::Result<String> {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("powershell command failed: {}", stderr),
-        ))
+        Err(io::Error::other(format!(
+            "powershell command failed: {}",
+            stderr
+        )))
     }
 }
 

@@ -1,5 +1,4 @@
 use simplelog::*;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Shell::*;
@@ -18,7 +17,6 @@ static APP_STATE: OnceLock<AppState> = OnceLock::new();
 struct AppState {
     config: Config,
     timer: Mutex<TimerState>,
-    running: AtomicBool,
 }
 
 impl AppState {
@@ -26,7 +24,6 @@ impl AppState {
         Self {
             timer: Mutex::new(TimerState::new(&config)),
             config,
-            running: AtomicBool::new(true),
         }
     }
 
@@ -36,14 +33,6 @@ impl AppState {
 
     fn timer(&self) -> &Mutex<TimerState> {
         &self.timer
-    }
-
-    fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
-    }
-
-    fn stop(&self) {
-        self.running.store(false, Ordering::SeqCst);
     }
 }
 
@@ -63,35 +52,27 @@ pub fn get_schedule_reminders() -> Vec<String> {
     app_state().timer().lock().unwrap().schedule_reminders()
 }
 
-pub fn tick_timer() -> Vec<ReminderEvent> {
+pub fn tick_timer() -> Option<ReminderEvent> {
     app_state().timer().lock().unwrap().tick()
 }
 
 pub fn reset_timer() {
-    let state = app_state();
-    let mut timer = state.timer().lock().unwrap();
-    timer.reset_interval();
-    timer.request_interval_reminder();
+    app_state().timer().lock().unwrap().reset_interval();
 }
 
 pub fn shutdown(hwnd: HWND) {
     unsafe {
-        let _ = Shell_NotifyIconW(NIM_DELETE, &tray::create_nid(hwnd));
-        let _ = KillTimer(hwnd, 1);
-        app_state().stop();
         let _ = DestroyWindow(hwnd);
     }
 }
 
-pub fn dispatch_reminders(events: Vec<ReminderEvent>) {
-    for event in events {
-        log::info!("{} triggered at {}", event.label(), event.time);
-        overlay::show_overlay_with_params(overlay::OverlayParams::from_config(
-            config(),
-            event.bg_color,
-            event.time,
-        ));
-    }
+pub fn dispatch_reminder(event: ReminderEvent) {
+    log::info!("{} triggered at {}", event.label(), event.time);
+    overlay::show_overlay_with_params(overlay::OverlayParams::from_config(
+        config(),
+        event.bg_color,
+        event.time,
+    ));
 }
 
 pub fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -137,11 +118,6 @@ impl App {
         APP_STATE
             .set(AppState::new(config.clone()))
             .expect("AppState already set");
-        app_state()
-            .timer()
-            .lock()
-            .unwrap()
-            .request_interval_reminder();
         log::info!(
             "Config loaded: interval={}s, schedule_count={}",
             config.interval_reminder.interval,
@@ -165,10 +141,6 @@ impl App {
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
-
-            if !app_state().is_running() {
-                break;
-            }
         }
     }
 

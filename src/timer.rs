@@ -33,7 +33,7 @@ impl TimerState {
         let interval = Duration::from_secs(config.interval_reminder.interval);
         TimerState {
             next_interval_at: Instant::now() + interval,
-            pending_interval_reminder: false,
+            pending_interval_reminder: true,
             last_time: None,
             interval,
             interval_bg_color: config.interval_reminder.bg_color,
@@ -43,9 +43,6 @@ impl TimerState {
 
     pub fn reset_interval(&mut self) {
         self.next_interval_at = Instant::now() + self.interval;
-    }
-
-    pub fn request_interval_reminder(&mut self) {
         self.pending_interval_reminder = true;
     }
 
@@ -55,7 +52,7 @@ impl TimerState {
             .saturating_duration_since(Instant::now())
             .as_secs();
 
-        (remaining_secs + 59) / 60
+        remaining_secs.div_ceil(60)
     }
 
     pub fn schedule_reminders(&self) -> Vec<String> {
@@ -65,18 +62,13 @@ impl TimerState {
             .collect()
     }
 
-    pub fn tick(&mut self) -> Vec<ReminderEvent> {
-        let current_time = current_time();
+    pub fn tick(&mut self) -> Option<ReminderEvent> {
+        self.tick_at(current_time())
+    }
 
-        if let Some(event) = self.collect_schedule_event(current_time) {
-            return vec![event];
-        }
-
-        if let Some(event) = self.collect_interval_event(current_time) {
-            return vec![event];
-        }
-
-        Vec::new()
+    fn tick_at(&mut self, current_time: ClockTime) -> Option<ReminderEvent> {
+        self.collect_schedule_event(current_time)
+            .or_else(|| self.collect_interval_event(current_time))
     }
 
     fn collect_schedule_event(&mut self, current_time: ClockTime) -> Option<ReminderEvent> {
@@ -102,11 +94,7 @@ impl TimerState {
     fn collect_interval_event(&mut self, current_time: ClockTime) -> Option<ReminderEvent> {
         if self.pending_interval_reminder {
             self.pending_interval_reminder = false;
-            return Some(ReminderEvent::new(
-                ReminderKind::Interval,
-                self.interval_bg_color,
-                current_time.to_string(),
-            ));
+            return Some(self.interval_reminder_at(current_time));
         }
 
         let now = Instant::now();
@@ -121,11 +109,15 @@ impl TimerState {
                 self.next_interval_at += self.interval;
             }
         }
-        Some(ReminderEvent::new(
+        Some(self.interval_reminder_at(current_time))
+    }
+
+    fn interval_reminder_at(&self, current_time: ClockTime) -> ReminderEvent {
+        ReminderEvent::new(
             ReminderKind::Interval,
             self.interval_bg_color,
             current_time.to_string(),
-        ))
+        )
     }
 }
 
@@ -196,7 +188,7 @@ mod tests {
         let now = Instant::now();
         state.next_interval_at = now;
 
-        let event = state.collect_schedule_event(ClockTime {
+        let event = state.tick_at(ClockTime {
             hour: 9,
             minute: 30,
         });
@@ -212,52 +204,98 @@ mod tests {
     }
 
     #[test]
-    fn pending_interval_reminder_triggers_once_before_normal_interval() {
+    fn tick_returns_none_when_no_reminder_is_due() {
         let config = test_config();
         let mut state = TimerState::new(&config);
-        state.request_interval_reminder();
+        state.pending_interval_reminder = false;
 
-        let events = state
-            .collect_interval_event(ClockTime {
-                hour: 9,
-                minute: 31,
-            })
-            .into_iter()
-            .collect::<Vec<_>>();
+        let event = state.tick_at(ClockTime {
+            hour: 9,
+            minute: 31,
+        });
+
+        assert!(event.is_none());
+    }
+
+    #[test]
+    fn pending_interval_reminder_triggers_once_without_changing_deadline() {
+        let config = test_config();
+        let mut state = TimerState::new(&config);
+        let deadline = state.next_interval_at;
+
+        let event = state.collect_interval_event(ClockTime {
+            hour: 9,
+            minute: 31,
+        });
 
         assert_eq!(
-            events,
-            vec![ReminderEvent::new(
+            event,
+            Some(ReminderEvent::new(
                 ReminderKind::Interval,
                 config.interval_reminder.bg_color,
                 "09:31".to_string(),
-            )]
+            ))
         );
+        assert_eq!(state.next_interval_at, deadline);
         assert!(!state.pending_interval_reminder);
+    }
+
+    #[test]
+    fn pending_interval_reminder_preserves_schedule_priority() {
+        let config = test_config();
+        let mut state = TimerState::new(&config);
+        let deadline = state.next_interval_at;
+
+        let event = state.tick_at(ClockTime {
+            hour: 9,
+            minute: 30,
+        });
+
+        assert!(matches!(
+            event,
+            Some(ReminderEvent {
+                kind: ReminderKind::Schedule,
+                bg_color,
+                ..
+            }) if bg_color == config.schedule_reminder[0].bg_color
+        ));
+        assert_eq!(state.next_interval_at, deadline);
+        assert!(state.pending_interval_reminder);
+    }
+
+    #[test]
+    fn reset_reschedules_interval_and_queues_immediate_reminder() {
+        let config = test_config();
+        let mut state = TimerState::new(&config);
+        state.pending_interval_reminder = false;
+        let reset_started_at = Instant::now();
+
+        state.reset_interval();
+
+        assert!(state.next_interval_at >= reset_started_at + state.interval);
+        assert!(state.pending_interval_reminder);
     }
 
     #[test]
     fn interval_event_reschedules_next_interval_when_no_schedule_matches() {
         let config = test_config();
         let mut state = TimerState::new(&config);
+        state.pending_interval_reminder = false;
         let now = Instant::now();
         state.next_interval_at = now;
 
-        let events = state
-            .collect_interval_event(ClockTime {
-                hour: 9,
-                minute: 31,
-            })
-            .into_iter()
-            .collect::<Vec<_>>();
+        let event = state.collect_interval_event(ClockTime {
+            hour: 9,
+            minute: 31,
+        });
 
         assert_eq!(
-            events,
-            vec![ReminderEvent::new(
+            event,
+            Some(ReminderEvent::new(
                 ReminderKind::Interval,
                 config.interval_reminder.bg_color,
                 "09:31".to_string(),
-            )]
+            ))
         );
         assert_eq!(state.next_interval_at, now + state.interval);
     }
@@ -266,6 +304,7 @@ mod tests {
     fn delayed_interval_event_preserves_original_cadence() {
         let config = test_config();
         let mut state = TimerState::new(&config);
+        state.pending_interval_reminder = false;
         let original_deadline = Instant::now() - Duration::from_secs(1);
         state.next_interval_at = original_deadline;
 
@@ -282,6 +321,7 @@ mod tests {
     fn delayed_interval_event_skips_missed_deadlines() {
         let config = test_config();
         let mut state = TimerState::new(&config);
+        state.pending_interval_reminder = false;
         let original_deadline = Instant::now() - Duration::from_secs(601);
         state.next_interval_at = original_deadline;
 

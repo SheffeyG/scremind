@@ -1,5 +1,3 @@
-use std::ptr::null_mut;
-
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::Graphics::Gdi::*;
@@ -32,11 +30,11 @@ impl OverlayRenderer {
         view: &OverlayViewState,
     ) -> windows::core::Result<()> {
         if self.cache.is_none() {
-            self.cache = Some(SurfaceCache::new(source_hdc, view.bounds)?);
+            let cache = SurfaceCache::new(source_hdc, view.bounds)?;
             let font = self.font_handle();
-            let cache = self.cache.as_mut().expect("surface cache initialized");
             paint_background(cache.background.hdc(), &cache.rect, view.bg_color);
-            paint_text_layer(cache.text.hdc(), &cache.rect, view, font);
+            paint_text_layer(cache.text.hdc(), &cache.rect, view, font)?;
+            self.cache = Some(cache);
         }
 
         Ok(())
@@ -120,17 +118,22 @@ fn paint_background(hdc: HDC, rect: &RECT, bg_color: Rgba) {
     }
 }
 
-fn paint_text_layer(hdc: HDC, rect: &RECT, view: &OverlayViewState, font: Option<HFONT>) {
+fn paint_text_layer(
+    hdc: HDC,
+    rect: &RECT,
+    view: &OverlayViewState,
+    font: Option<HFONT>,
+) -> windows::core::Result<()> {
     let black_brush = OwnedBrush::solid(COLORREF(0));
     unsafe {
         let _ = FillRect(hdc, rect, black_brush.handle());
     }
 
     let Some(font) = font else {
-        return;
+        return Ok(());
     };
 
-    let _font_guard = unsafe { SelectedFontGuard::select(hdc, font) };
+    let _font_guard = unsafe { SelectedFontGuard::select(hdc, font)? };
     unsafe {
         let _ = SetTextColor(
             hdc,
@@ -147,6 +150,8 @@ fn paint_text_layer(hdc: HDC, rect: &RECT, view: &OverlayViewState, font: Option
             DT_CENTER | DT_VCENTER | DT_SINGLELINE,
         );
     }
+
+    Ok(())
 }
 
 fn reset_frame(frame_hdc: HDC, background_hdc: HDC, rect: &RECT) {
@@ -230,7 +235,7 @@ impl Drop for PaintSession {
 impl WindowDc {
     unsafe fn acquire(hwnd: HWND) -> windows::core::Result<Self> {
         let hdc = GetDC(hwnd);
-        if hdc.0 == null_mut() {
+        if hdc.0.is_null() {
             Err(windows::core::Error::from_win32())
         } else {
             Ok(Self { hwnd, hdc })
@@ -277,20 +282,20 @@ impl SurfaceCache {
 
 #[derive(Debug)]
 struct PaintSurface {
-    dc: OwnedCompatibleDc,
-    _bitmap: OwnedBitmap,
     _selection: SelectedBitmapGuard,
+    _bitmap: OwnedBitmap,
+    dc: OwnedCompatibleDc,
 }
 
 impl PaintSurface {
     fn new(source_hdc: HDC, width: i32, height: i32) -> Option<Self> {
         let dc = OwnedCompatibleDc::new(source_hdc)?;
         let bitmap = OwnedBitmap::new(source_hdc, width, height)?;
-        let selection = unsafe { SelectedBitmapGuard::select(dc.handle(), bitmap.handle()) };
+        let selection = unsafe { SelectedBitmapGuard::select(dc.handle(), bitmap.handle()).ok()? };
         Some(Self {
-            dc,
-            _bitmap: bitmap,
             _selection: selection,
+            _bitmap: bitmap,
+            dc,
         })
     }
 
@@ -305,7 +310,7 @@ struct OwnedCompatibleDc(HDC);
 impl OwnedCompatibleDc {
     fn new(source_hdc: HDC) -> Option<Self> {
         let hdc = unsafe { CreateCompatibleDC(source_hdc) };
-        if hdc.0 == null_mut() {
+        if hdc.0.is_null() {
             None
         } else {
             Some(Self(hdc))
@@ -331,7 +336,7 @@ struct OwnedBitmap(HBITMAP);
 impl OwnedBitmap {
     fn new(source_hdc: HDC, width: i32, height: i32) -> Option<Self> {
         let bitmap = unsafe { CreateCompatibleBitmap(source_hdc, width, height) };
-        if bitmap.0 == null_mut() {
+        if bitmap.0.is_null() {
             None
         } else {
             Some(Self(bitmap))
@@ -396,7 +401,7 @@ impl OwnedFont {
             )
         };
 
-        if font.0 == null_mut() {
+        if font.0.is_null() {
             Err(windows::core::Error::from_win32())
         } else {
             Ok(Self(font))
@@ -423,9 +428,13 @@ struct SelectedBitmapGuard {
 }
 
 impl SelectedBitmapGuard {
-    unsafe fn select(hdc: HDC, bitmap: HBITMAP) -> Self {
+    unsafe fn select(hdc: HDC, bitmap: HBITMAP) -> windows::core::Result<Self> {
         let old = SelectObject(hdc, HGDIOBJ(bitmap.0));
-        Self { hdc, old }
+        if old.0.is_null() || old.0 as isize == GDI_ERROR as isize {
+            Err(windows::core::Error::from_win32())
+        } else {
+            Ok(Self { hdc, old })
+        }
     }
 }
 
@@ -444,9 +453,13 @@ struct SelectedFontGuard {
 }
 
 impl SelectedFontGuard {
-    unsafe fn select(hdc: HDC, font: HFONT) -> Self {
+    unsafe fn select(hdc: HDC, font: HFONT) -> windows::core::Result<Self> {
         let old = SelectObject(hdc, HGDIOBJ(font.0));
-        Self { hdc, old }
+        if old.0.is_null() || old.0 as isize == GDI_ERROR as isize {
+            Err(windows::core::Error::from_win32())
+        } else {
+            Ok(Self { hdc, old })
+        }
     }
 }
 

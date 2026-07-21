@@ -1,12 +1,12 @@
 use std::error::Error;
 use std::mem;
-use std::sync::Once;
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use windows::core::w;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::Graphics::Gdi::{CreateSolidBrush, InvalidateRect, UpdateWindow};
+use windows::Win32::Graphics::Gdi::{InvalidateRect, UpdateWindow};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -18,7 +18,7 @@ use super::hooks::{
 use super::render::paint_overlay;
 use super::types::{OverlayParams, OverlayWindowState};
 
-static REGISTER_OVERLAY_CLASS: Once = Once::new();
+static OVERLAY_CLASS_REGISTERED: OnceLock<()> = OnceLock::new();
 
 pub struct OverlayRuntime;
 
@@ -28,7 +28,7 @@ impl OverlayRuntime {
             let h_instance = GetModuleHandleW(None)?;
             let h_instance = HINSTANCE(h_instance.0);
 
-            register_overlay_class(h_instance);
+            register_overlay_class(h_instance)?;
             let screen_width = GetSystemMetrics(SM_CXSCREEN);
             let screen_height = GetSystemMetrics(SM_CYSCREEN);
             let hwnd = create_overlay_window(
@@ -57,21 +57,25 @@ impl OverlayRuntime {
     }
 }
 
-unsafe fn register_overlay_class(h_instance: HINSTANCE) {
-    REGISTER_OVERLAY_CLASS.call_once(|| {
-        let window_class = WNDCLASSW {
-            style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(overlay_wnd_proc),
-            hInstance: h_instance,
-            lpszClassName: w!("OverlayWindowClass"),
-            hbrBackground: CreateSolidBrush(COLORREF(0)),
-            ..mem::zeroed()
-        };
-        let atom = RegisterClassW(&window_class);
-        if atom == 0 {
-            log::error!("Failed to register overlay window class");
-        }
-    });
+unsafe fn register_overlay_class(h_instance: HINSTANCE) -> windows::core::Result<()> {
+    if OVERLAY_CLASS_REGISTERED.get().is_some() {
+        return Ok(());
+    }
+
+    let window_class = WNDCLASSW {
+        style: CS_HREDRAW | CS_VREDRAW,
+        lpfnWndProc: Some(overlay_wnd_proc),
+        hInstance: h_instance,
+        lpszClassName: w!("OverlayWindowClass"),
+        ..mem::zeroed()
+    };
+
+    if RegisterClassW(&window_class) == 0 {
+        Err(windows::core::Error::from_win32())
+    } else {
+        let _ = OVERLAY_CLASS_REGISTERED.set(());
+        Ok(())
+    }
 }
 
 unsafe fn create_overlay_window(

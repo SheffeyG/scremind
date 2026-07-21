@@ -27,13 +27,17 @@ fn smootherstep(t: f64) -> f64 {
     t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
 }
 
+pub(crate) fn normalize_fade_duration(duration: f64) -> f64 {
+    duration.max(0.1)
+}
+
 impl FadeAnimation {
     pub fn new(target_alpha: u8, fade_duration: f64, hold_duration: [f64; 2]) -> Self {
         Self {
             state: FadeState::FadeIn,
             state_started_at: Instant::now(),
             target_alpha,
-            fade_duration: fade_duration.max(0.1),
+            fade_duration: normalize_fade_duration(fade_duration),
             hold_duration,
         }
     }

@@ -1,6 +1,6 @@
 use windows::Win32::Foundation::RECT;
 
-use crate::animation::FadeAnimation;
+use crate::animation::{normalize_fade_duration, FadeAnimation};
 use crate::config::{Config, Rgba};
 
 use super::render::OverlayRenderer;
@@ -111,10 +111,6 @@ impl OverlayWindowState {
             renderer: OverlayRenderer::default(),
         }
     }
-}
-
-pub fn normalize_fade_duration(duration: f64) -> f64 {
-    duration.max(0.1)
 }
 
 pub fn normalize_hold_duration(hold: [f64; 2]) -> [f64; 2] {
