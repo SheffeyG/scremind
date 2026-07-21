@@ -114,7 +114,13 @@ impl TimerState {
             return None;
         }
 
-        self.next_interval_at = now + self.interval;
+        if self.interval.is_zero() {
+            self.next_interval_at = now;
+        } else {
+            while self.next_interval_at <= now {
+                self.next_interval_at += self.interval;
+            }
+        }
         Some(ReminderEvent::new(
             ReminderKind::Interval,
             self.interval_bg_color,
@@ -254,6 +260,41 @@ mod tests {
             )]
         );
         assert_eq!(state.next_interval_at, now + state.interval);
+    }
+
+    #[test]
+    fn delayed_interval_event_preserves_original_cadence() {
+        let config = test_config();
+        let mut state = TimerState::new(&config);
+        let original_deadline = Instant::now() - Duration::from_secs(1);
+        state.next_interval_at = original_deadline;
+
+        let event = state.collect_interval_event(ClockTime {
+            hour: 9,
+            minute: 31,
+        });
+
+        assert!(event.is_some());
+        assert_eq!(state.next_interval_at, original_deadline + state.interval);
+    }
+
+    #[test]
+    fn delayed_interval_event_skips_missed_deadlines() {
+        let config = test_config();
+        let mut state = TimerState::new(&config);
+        let original_deadline = Instant::now() - Duration::from_secs(601);
+        state.next_interval_at = original_deadline;
+
+        let event = state.collect_interval_event(ClockTime {
+            hour: 9,
+            minute: 31,
+        });
+
+        assert!(event.is_some());
+        assert_eq!(
+            state.next_interval_at,
+            original_deadline + state.interval + state.interval + state.interval
+        );
     }
 
     #[test]
